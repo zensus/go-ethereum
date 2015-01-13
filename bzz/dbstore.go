@@ -11,7 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	//	"github.com/ethereum/go-ethereum/ethutil"
 	"github.com/ethereum/go-ethereum/rlp"
-	//	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb"
 	//	"path"
 )
 
@@ -19,6 +19,15 @@ const dbMaxEntries = 5000 // max number of stored (cached) blocks
 
 const gcArraySize = 500
 const gcArrayFreeRatio = 10
+
+// key prefixes for leveldb storage
+const kpIndex = 0
+const kpData = 1
+
+var keyAccessCnt = []byte{2}
+var keyEntryCnt = []byte{3}
+var keyDataIdx = []byte{4}
+var keyGCPos = []byte{5}
 
 type gcItem struct {
 	idx    uint64
@@ -31,9 +40,7 @@ type dpaDBStorage struct {
 	db *ethdb.LDBDatabase
 
 	// this should be stored in db, accessed transactionally
-	accessCnt uint64
-	entryCnt  uint64
-	dataIdx   uint64
+	entryCnt, accessCnt, dataIdx uint64
 
 	gcPos, gcStartPos []byte
 	gcArray           []*gcItem
@@ -44,6 +51,23 @@ type dpaDBIndex struct {
 	Access uint64
 }
 
+func bytesToU64(data []byte) uint64 {
+
+	if len(data) < 8 {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(data)
+
+}
+
+func u64ToBytes(val uint64) []byte {
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint64(data, val)
+	return data
+
+}
+
 func getIndexGCValue(index *dpaDBIndex) uint64 {
 
 	return index.Access
@@ -52,7 +76,6 @@ func getIndexGCValue(index *dpaDBIndex) uint64 {
 
 func (s *dpaDBStorage) updateIndexAccess(index *dpaDBIndex) {
 
-	s.accessCnt++
 	index.Access = s.accessCnt
 
 }
@@ -161,10 +184,30 @@ func (s *dpaDBStorage) collectGarbage() {
 
 	it := s.db.NewIterator()
 	it.Seek(s.gcPos)
+	if it.Valid() {
+		s.gcPos = it.Key()
+	} else {
+		s.gcPos = nil
+	}
 	gcnt := 0
+
 	for gcnt < gcArraySize {
+
+		if (s.gcPos == nil) || (s.gcPos[0] != kpIndex) {
+			it.Seek(s.gcStartPos)
+			if it.Valid() {
+				s.gcPos = it.Key()
+			} else {
+				s.gcPos = nil
+			}
+		}
+
+		if (s.gcPos == nil) || (s.gcPos[0] != kpIndex) {
+			break
+		}
+
 		gci := new(gcItem)
-		gci.idxKey = it.Key()
+		gci.idxKey = s.gcPos
 		var index dpaDBIndex
 		decodeIndex(it.Value(), &index)
 		gci.idx = index.Idx
@@ -173,6 +216,11 @@ func (s *dpaDBStorage) collectGarbage() {
 		s.gcArray[gcnt] = gci
 		gcnt++
 		it.Next()
+		if it.Valid() {
+			s.gcPos = it.Key()
+		} else {
+			s.gcPos = nil
+		}
 	}
 
 	cutidx := gcListSelect(s.gcArray, 0, gcnt-1, gcnt/gcArrayFreeRatio)
@@ -183,17 +231,29 @@ func (s *dpaDBStorage) collectGarbage() {
 	// actual gc
 	for i := 0; i < gcnt; i++ {
 		if s.gcArray[i].value < cutval {
-			s.db.Delete(s.gcArray[i].idxKey)
-			s.db.Delete(getDataKey(s.gcArray[i].idx))
+			batch := new(leveldb.Batch)
+			batch.Delete(s.gcArray[i].idxKey)
+			batch.Delete(getDataKey(s.gcArray[i].idx))
 			s.entryCnt--
+			batch.Put(keyEntryCnt, u64ToBytes(s.entryCnt))
+			s.db.Write(batch)
 		}
 	}
 
 	//fmt.Println(s.entryCnt)
 
+	s.db.Put(keyGCPos, s.gcPos)
+
 }
 
 func (s *dpaDBStorage) add(entry *dpaStoreReq) {
+
+	ikey := getIndexKey(entry.hash)
+	var index dpaDBIndex
+
+	if s.tryAccessIdx(ikey, &index) {
+		return // already exists, only update access
+	}
 
 	data := encodeData(&entry.dpaNode)
 	//data := ethutil.Encode([]interface{}{entry})
@@ -202,35 +262,58 @@ func (s *dpaDBStorage) add(entry *dpaStoreReq) {
 		s.collectGarbage()
 	}
 
-	s.entryCnt++
-	s.dataIdx++
-	s.db.Put(getDataKey(s.dataIdx), data)
+	batch := new(leveldb.Batch)
 
-	var index dpaDBIndex
+	s.entryCnt++
+	batch.Put(keyEntryCnt, u64ToBytes(s.entryCnt))
+	s.dataIdx++
+	batch.Put(keyDataIdx, u64ToBytes(s.dataIdx))
+	s.accessCnt++
+	batch.Put(keyAccessCnt, u64ToBytes(s.accessCnt))
+
+	batch.Put(getDataKey(s.dataIdx), data)
+
 	index.Idx = s.dataIdx
 	s.updateIndexAccess(&index)
 
 	idata := encodeIndex(&index)
-	s.db.Put(getIndexKey(entry.hash), idata)
+	batch.Put(ikey, idata)
 
+	s.db.Write(batch)
+
+}
+
+// try to find index; if found, update access cnt and return true
+func (s *dpaDBStorage) tryAccessIdx(ikey []byte, index *dpaDBIndex) bool {
+
+	idata, err := s.db.Get(ikey)
+	if err != nil {
+		return false
+	}
+	decodeIndex(idata, index)
+
+	batch := new(leveldb.Batch)
+
+	s.accessCnt++
+	batch.Put(keyAccessCnt, u64ToBytes(s.accessCnt))
+	s.updateIndexAccess(index)
+	idata = encodeIndex(index)
+	batch.Put(ikey, idata)
+
+	s.db.Write(batch)
+
+	return true
 }
 
 func (s *dpaDBStorage) find(hash HashType) (entry dpaNode) {
 
 	key := getIndexKey(hash)
-	idata, _ := s.db.Get(key)
-
 	var index dpaDBIndex
-	decodeIndex(idata, &index)
 
-	s.updateIndexAccess(&index)
-	idata = encodeIndex(&index)
-	s.db.Delete(key)
-	s.db.Put(key, idata)
-
-	data, _ := s.db.Get(getDataKey(index.Idx))
-
-	decodeData(data, &entry)
+	if s.tryAccessIdx(key, &index) {
+		data, _ := s.db.Get(getDataKey(index.Idx))
+		decodeData(data, &entry)
+	}
 
 	return
 
@@ -247,6 +330,15 @@ func (s *dpaDBStorage) process_store(req *dpaStoreReq) {
 }
 
 func (s *dpaDBStorage) process_retrieve(req *dpaRetrieveReq) {
+
+	if req.result_chn == nil {
+
+		key := getIndexKey(req.hash)
+		var index dpaDBIndex
+		s.tryAccessIdx(key, &index) // result_chn == nil, only update access cnt
+
+		return
+	}
 
 	entry := s.find(req.hash)
 
@@ -281,9 +373,22 @@ func (s *dpaDBStorage) Init(ch *dpaStorage) {
 	}
 
 	s.gcStartPos = make([]byte, HashSize+1)
-	s.gcPos = s.gcStartPos
-
 	s.gcArray = make([]*gcItem, gcArraySize)
+
+	data, _ := s.db.Get(keyEntryCnt)
+	s.entryCnt = bytesToU64(data)
+	data, _ = s.db.Get(keyAccessCnt)
+	s.accessCnt = bytesToU64(data)
+	data, _ = s.db.Get(keyDataIdx)
+	s.dataIdx = bytesToU64(data)
+	s.gcPos, _ = s.db.Get(keyGCPos)
+	if s.gcPos == nil {
+		s.gcPos = s.gcStartPos
+	}
+
+	//	fmt.Println(s.entryCnt)
+	//	fmt.Println(s.accessCnt)
+	//	fmt.Println(s.dataIdx)
 
 }
 

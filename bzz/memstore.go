@@ -6,11 +6,14 @@ const memMaxEntries = 500 // max number of stored (cached) blocks
 const memTreeLW = 2       // log2(subtree count) of the subtrees
 const memTreeFLW = 14     // log2(subtree count) of the root layer
 
+const dbForceUpdateAccessCnt = 1000
+
 type dpaMemStorage struct {
 	dpaStorage
-	memtree    *dpaMemTree
-	entry_cnt  uint   // stored entries
-	access_cnt uint64 // access counter; oldest is thrown away when full
+	memtree     *dpaMemTree
+	entry_cnt   uint   // stored entries
+	access_cnt  uint64 // access counter; oldest is thrown away when full
+	dbAccessCnt uint64
 }
 
 /*
@@ -34,7 +37,9 @@ type dpaMemTree struct {
 	bits  uint // log2(subtree count)
 	width uint // subtree count
 
-	entry  *dpaStoreReq // if subtrees are present, entry should be nil
+	entry        *dpaStoreReq // if subtrees are present, entry should be nil
+	lastDBaccess uint64
+
 	access []uint64
 }
 
@@ -136,6 +141,7 @@ func (s *dpaMemStorage) add(entry *dpaStoreReq) {
 	}
 
 	node.entry = entry
+	node.lastDBaccess = s.dbAccessCnt
 	node.update_access(s.access_cnt)
 	s.entry_cnt++
 
@@ -158,6 +164,13 @@ func (s *dpaMemStorage) find(hash HashType) (entry *dpaStoreReq) {
 	if node.entry.hash.isEqual(hash) {
 		s.access_cnt++
 		node.update_access(s.access_cnt)
+		if s.dbAccessCnt-node.lastDBaccess > dbForceUpdateAccessCnt {
+			ureq := new(dpaRetrieveReq)
+			ureq.hash = entry.hash
+			s.chain.retrieve_chn <- ureq // result_chn == nil, only update access cnt
+			s.dbAccessCnt++
+			node.lastDBaccess = s.dbAccessCnt
+		}
 		return node.entry
 	} else {
 		return nil
@@ -255,7 +268,20 @@ func (s *dpaMemStorage) process_retrieve(req *dpaRetrieveReq) {
 	entry := s.find(req.hash)
 	if entry == nil {
 		if s.chain != nil {
+			result_chn := req.result_chn
+			req.result_chn = make(chan *dpaRetrieveRes)
 			s.chain.retrieve_chn <- req
+			go func() {
+				res := <-req.result_chn
+				if res.data != nil {
+					s.dbAccessCnt++
+					sreq := new(dpaStoreReq)
+					sreq.dpaNode = res.dpaNode
+					sreq.hash = req.hash
+					s.add(sreq)
+				}
+				result_chn <- res
+			}()
 			return
 		}
 	}
