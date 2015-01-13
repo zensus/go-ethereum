@@ -9,7 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/ethutil"
+	//	"github.com/ethereum/go-ethereum/ethutil"
 	"github.com/ethereum/go-ethereum/rlp"
 	//	"github.com/syndtr/goleveldb/leveldb"
 	//	"path"
@@ -80,13 +80,23 @@ func getDataKey(idx uint64) []byte {
 
 func encodeIndex(index *dpaDBIndex) []byte {
 
-	return ethutil.Encode([]interface{}{index.Idx, index.Access})
+	data, _ := rlp.EncodeToBytes(index)
+	return data
 
 }
 
 func encodeData(entry *dpaNode) []byte {
 
-	return ethutil.Encode([]interface{}{entry.data, entry.size})
+	var rlpEntry struct {
+		Data []byte
+		Size uint64
+	}
+
+	rlpEntry.Data = entry.data
+	rlpEntry.Size = uint64(entry.size)
+
+	data, _ := rlp.EncodeToBytes(rlpEntry)
+	return data
 
 }
 
