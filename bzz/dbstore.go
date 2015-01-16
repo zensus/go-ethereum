@@ -30,10 +30,11 @@ type dpaDBStorage struct {
 	dpaStorage
 	db *ethdb.LDBDatabase
 
+	// this should be stored in db, accessed transactionally
 	accessCnt uint64
 	entryCnt  uint64
+	dataIdx   uint64
 
-	dataIdx           uint64
 	gcPos, gcStartPos []byte
 	gcArray           []*gcItem
 }
@@ -60,6 +61,8 @@ func getIndexKey(hash HashType) []byte {
 
 	key := make([]byte, HashSize+1)
 	key[0] = 0
+	// db keys derived from hash:
+	// two halves swapped for uniformly distributed prefix
 	copy(key[1:HashSize/2+1], hash[HashSize/2:HashSize])
 	copy(key[HashSize/2+1:HashSize+1], hash[0:HashSize/2])
 
@@ -155,6 +158,7 @@ func (s *dpaDBStorage) collectGarbage() {
 		var index dpaDBIndex
 		decodeIndex(it.Value(), &index)
 		gci.idx = index.Idx
+		// the smaller, the more likely to be gc'd
 		gci.value = getIndexGCValue(&index)
 		s.gcArray[gcnt] = gci
 		gcnt++
@@ -166,6 +170,7 @@ func (s *dpaDBStorage) collectGarbage() {
 
 	//fmt.Print(s.entryCnt, " ")
 
+	// actual gc
 	for i := 0; i < gcnt; i++ {
 		if s.gcArray[i].value < cutval {
 			s.db.Delete(s.gcArray[i].idxKey)
