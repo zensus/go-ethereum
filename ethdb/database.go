@@ -16,7 +16,8 @@ type LDBDatabase struct {
 }
 
 func NewLDBDatabase(name string) (*LDBDatabase, error) {
-	dbPath := path.Join(ethutil.Config.ExecPath, name)
+	//	dbPath := path.Join(ethutil.Config.ExecPath, name)
+	dbPath := name
 
 	// Open the db
 	db, err := leveldb.OpenFile(dbPath, nil)
@@ -24,7 +25,7 @@ func NewLDBDatabase(name string) (*LDBDatabase, error) {
 		return nil, err
 	}
 
-	database := &LDBDatabase{DB: db, Comp: true}
+	database := &LDBDatabase{DB: db, Comp: false}
 
 	return database, nil
 }
