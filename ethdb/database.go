@@ -2,7 +2,7 @@ package ethdb
 
 import (
 	"fmt"
-	"path"
+	//	"path"
 
 	"github.com/ethereum/go-ethereum/compression/rle"
 	"github.com/ethereum/go-ethereum/ethutil"
