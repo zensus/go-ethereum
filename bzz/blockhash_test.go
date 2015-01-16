@@ -1,6 +1,6 @@
 // test bench for the package blockhash
 
-package bzz2
+package bzz
 
 import (
 	//	"fmt"
