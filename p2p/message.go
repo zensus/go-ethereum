@@ -93,6 +93,10 @@ func EncodeMsg(w MsgWriter, code uint64, data ...interface{}) error {
 var magicToken = []byte{34, 64, 8, 145}
 
 func writeMsg(w io.Writer, msg Msg) error {
+	return writeMsgToPacket(w, w, msg)
+}
+
+func writeMsgToPacket(w io.Writer, pw io.Writer, msg Msg) (err error) {
 	// TODO: handle case when Size + len(code) + len(listhdr) overflows uint32
 	code := ethutil.Encode(uint32(msg.Code))
 	listhdr := makeListHeader(msg.Size + uint32(len(code)))
@@ -102,13 +106,17 @@ func writeMsg(w io.Writer, msg Msg) error {
 	copy(start, magicToken)
 	binary.BigEndian.PutUint32(start[4:], payloadLen)
 
-	for _, b := range [][]byte{start, listhdr, code} {
-		if _, err := w.Write(b); err != nil {
-			return err
-		}
+	if _, err = w.Write(start); err != nil {
+		return
 	}
-	_, err := io.CopyN(w, msg.Payload, int64(msg.Size))
-	return err
+	if _, err = w.Write(listhdr); err != nil {
+		return
+	}
+	if _, err = pw.Write(code); err != nil {
+		return
+	}
+	_, err = io.CopyN(pw, msg.Payload, int64(msg.Size))
+	return
 }
 
 func makeListHeader(length uint32) []byte {
@@ -123,6 +131,10 @@ func makeListHeader(length uint32) []byte {
 // readMsg reads a message header from r.
 // It takes an rlp.ByteReader to ensure that the decoding doesn't buffer.
 func readMsg(r rlp.ByteReader) (msg Msg, err error) {
+	return readMsgFromPacket(r, r)
+}
+
+func readMsgFromPacket(r io.Reader, pr rlp.ByteReader) (msg Msg, err error) {
 	// read magic and payload size
 	start := make([]byte, 8)
 	if _, err = io.ReadFull(r, start); err != nil {
@@ -134,7 +146,7 @@ func readMsg(r rlp.ByteReader) (msg Msg, err error) {
 	size := binary.BigEndian.Uint32(start[4:])
 
 	// decode start of RLP message to get the message code
-	posr := &postrack{r, 0}
+	posr := &postrack{pr, 0}
 	s := rlp.NewStream(posr)
 	if _, err := s.List(); err != nil {
 		return msg, err
