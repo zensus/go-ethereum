@@ -17,6 +17,7 @@ var blockSize = aes.BlockSize
 // it is initialised by Run() after a successful crypto handshake
 // aesSecret, macSecret, egressMac, ingress
 type secureRW struct {
+	pos                                         uint64
 	aesSecret, macSecret, egressMac, ingressMac []byte
 	r                                           io.Reader
 	w                                           io.Writer
@@ -69,6 +70,7 @@ func (self *secureRW) Write(plaintext []byte) (n int, err error) {
 
 // len(ciphertext) >= blockSize + len(payload) + shaLen
 func (self *secureRW) Read(payload []byte) (n int, err error) {
+  if self.current == nil {
 	ciphertext := make([]byte, blockSize+len(payload)) //sync.Pool?
 	if n, err = self.r.Read(ciphertext[:blockSize+len(payload)]); err != nil {
 		return

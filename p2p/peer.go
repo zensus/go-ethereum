@@ -485,7 +485,9 @@ func (p *Peer) writeMsg(msg Msg, timeout time.Duration) error {
 	if err := writeMsgToPacket(p.outconn, p.outconn, msg); err != nil {
 		return newPeerError(errWrite, "%v", err)
 	}
-	// return p.bufconn.Flush()
+	// if bufconn, ok := p.outconn.(*bufio.Writer); ok {
+	// 	return bufconn.Flush()
+	// }
 	return nil
 }
 
