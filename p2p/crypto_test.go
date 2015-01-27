@@ -2,9 +2,6 @@ package p2p
 
 import (
 	"bytes"
-	// "crypto/ecdsa"
-	// "crypto/elliptic"
-	// "crypto/rand"
 	"fmt"
 	"net"
 	"testing"
@@ -100,13 +97,15 @@ func TestCryptoHandshake(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 
+	conn0, conn1 := net.Pipe()
+
 	// now both parties should have the same session parameters
-	initSessionToken, initSecretRW, err := newSession(true, initNonce, recNonce, auth, randomPrivKey, remoteRandomPubKey)
+	initSessionToken, r0, _, err := newSession(conn0, conn0, true, initNonce, recNonce, auth, randomPrivKey, remoteRandomPubKey)
 	if err != nil {
 		t.Errorf("%v", err)
 	}
 
-	recSessionToken, recSecretRW, err := newSession(false, remoteInitNonce, remoteRecNonce, auth, remoteRandomPrivKey, remoteInitRandomPubKey)
+	recSessionToken, r1, _, err := newSession(conn1, conn1, false, remoteInitNonce, remoteRecNonce, auth, remoteRandomPrivKey, remoteInitRandomPubKey)
 	if err != nil {
 		t.Errorf("%v", err)
 	}
@@ -115,6 +114,16 @@ func TestCryptoHandshake(t *testing.T) {
 
 	// fmt.Printf("\nauth %x\ninitNonce %x\nresponse%x\nremoteRecNonce %x\nremoteInitNonce %x\nremoteRandomPubKey %x\nrecNonce %x\nremoteInitRandomPubKey %x\ninitSessionToken %x\n\n", auth, initNonce, response, remoteRecNonce, remoteInitNonce, remoteRandomPubKey, recNonce, remoteInitRandomPubKey, initSessionToken)
 
+	//
+	// var ok bool
+	sr0, ok := r0.(*secureRW)
+	if !ok {
+		t.Errorf("incorrect return type. expected *secureRW, got %T", r0)
+	}
+	sr1, ok := r1.(*secureRW)
+	if !ok {
+		t.Errorf("incorrect return type. expected *secureRW, got %T", r1)
+	}
 	if !bytes.Equal(initNonce, remoteInitNonce) {
 		t.Errorf("nonces do not match")
 	}
@@ -125,16 +134,16 @@ func TestCryptoHandshake(t *testing.T) {
 		t.Errorf("session tokens do not match")
 	}
 	// aesSecret, macSecret, egressMac, ingressMac
-	if !bytes.Equal(initSecretRW.aesSecret, recSecretRW.aesSecret) {
+	if !bytes.Equal(sr0.aesSecret, sr1.aesSecret) {
 		t.Errorf("AES secrets do not match")
 	}
-	if !bytes.Equal(initSecretRW.macSecret, recSecretRW.macSecret) {
+	if !bytes.Equal(sr0.macSecret, sr1.macSecret) {
 		t.Errorf("macSecrets do not match")
 	}
-	if !bytes.Equal(initSecretRW.egressMac, recSecretRW.ingressMac) {
+	if !bytes.Equal(sr0.egressMac, sr1.ingressMac) {
 		t.Errorf("initiator's egressMac do not match receiver's ingressMac")
 	}
-	if !bytes.Equal(initSecretRW.ingressMac, recSecretRW.egressMac) {
+	if !bytes.Equal(sr0.ingressMac, sr1.egressMac) {
 		t.Errorf("initiator's inressMac do not match receiver's egressMac")
 	}
 

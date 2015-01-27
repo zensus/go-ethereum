@@ -17,6 +17,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/logger"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // peerAddr is the structure of a peer list element.
@@ -69,7 +70,9 @@ type Peer struct {
 	// so only one protocol can write at a time.
 	writeMu sync.Mutex
 	conn    net.Conn
-	bufconn *bufio.ReadWriter
+	// bufconn *bufio.ReadWriter
+	inconn  io.Reader
+	outconn io.Writer
 
 	// These fields maintain the running protocols.
 	protocols       []Protocol
@@ -128,8 +131,9 @@ func newPeer(conn net.Conn, protocols []Protocol, dialAddr *peerAddr) *Peer {
 	p := &Peer{
 		Logger:      logger.NewLogger("P2P " + conn.RemoteAddr().String()),
 		conn:        conn,
+		inconn:      conn,
+		outconn:     conn,
 		dialAddr:    dialAddr,
-		bufconn:     bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
 		protocols:   protocols,
 		running:     make(map[string]*proto),
 		disc:        make(chan DiscReason),
@@ -229,22 +233,27 @@ func (p *Peer) loop() (reason DiscReason, err error) {
 	defer close(p.closed)
 	defer p.conn.Close()
 
-	var readLoop func(chan<- Msg, chan<- error, <-chan bool)
+	var payloadReader io.Reader
+	var payloadWriter io.Writer
 	if p.cryptoHandshake {
-		if readLoop, err = p.handleCryptoHandshake(); err != nil {
+		if payloadReader, payloadWriter, err = p.handleCryptoHandshake(); err != nil {
 			// from here on everything can be encrypted, authenticated
 			return DiscProtocolError, err // no graceful disconnect
 		}
 	} else {
-		readLoop = p.readLoop
+		payloadReader = bufio.NewReader(p.inconn)
+		payloadWriter = p.conn
 	}
+	p.inconn = payloadReader
+	p.outconn = payloadWriter
 
 	// read loop
 	readMsg := make(chan Msg)
 	readErr := make(chan error)
 	readNext := make(chan bool, 1)
 	protoDone := make(chan struct{}, 1)
-	go readLoop(readMsg, readErr, readNext)
+	// readloop attaches to the connection
+	go p.readLoop(readMsg, readErr, readNext, p.inconn, bufio.NewReader(payloadReader))
 	readNext <- true
 
 	close(p.cryptoReady)
@@ -305,10 +314,10 @@ loop:
 	return reason, err
 }
 
-func (p *Peer) readLoop(msgc chan<- Msg, errc chan<- error, unblock <-chan bool) {
+func (p *Peer) readLoop(msgc chan<- Msg, errc chan<- error, unblock <-chan bool, r io.Reader, pr rlp.ByteReader) {
 	for _ = range unblock {
 		p.conn.SetReadDeadline(time.Now().Add(msgReadTimeout))
-		if msg, err := readMsg(p.bufconn); err != nil {
+		if msg, err := readMsgFromPacket(r, pr); err != nil {
 			errc <- err
 		} else {
 			msgc <- msg
@@ -340,8 +349,6 @@ func (p *Peer) dispatch(msg Msg, protoDone chan struct{}) (wait bool, err error)
 	return wait, nil
 }
 
-type readLoop func(chan<- Msg, chan<- error, <-chan bool)
-
 func (p *Peer) PrivateKey() (prv *ecdsa.PrivateKey, err error) {
 	if prv = crypto.ToECDSA(p.privateKey); prv == nil {
 		err = fmt.Errorf("invalid private key")
@@ -349,7 +356,7 @@ func (p *Peer) PrivateKey() (prv *ecdsa.PrivateKey, err error) {
 	return
 }
 
-func (p *Peer) handleCryptoHandshake() (loop readLoop, err error) {
+func (p *Peer) handleCryptoHandshake() (r io.Reader, w io.Writer, err error) {
 	// cryptoId is just created for the lifecycle of the handshake
 	// it is survived by an encrypted readwriter
 	var initiator bool
@@ -363,21 +370,18 @@ func (p *Peer) handleCryptoHandshake() (loop readLoop, err error) {
 	}
 
 	// run on peer
-	// this bit handles the handshake and creates a secure communications channel with
-	// var rw *secretRW
+	// this bit handles the handshake and creates a secure communications channel with the local node
 	var prvKey *ecdsa.PrivateKey
 	if prvKey, err = p.PrivateKey(); err != nil {
 		err = fmt.Errorf("unable to access private key for client: %v", err)
 		return
 	}
 	// initialise a new secure session
-	if sessionToken, _, err = NewSecureSession(p.conn, prvKey, p.Pubkey(), sessionToken, initiator); err != nil {
+	if sessionToken, r, w, err = NewSecureSession(p.inconn, p.outconn, prvKey, p.Pubkey(), sessionToken, initiator); err != nil {
 		p.Debugf("unable to setup secure session: %v", err)
 		return
 	}
-	loop = func(msg chan<- Msg, err chan<- error, next <-chan bool) {
-		// this is the readloop :)
-	}
+	// do something with session Token
 	return
 }
 
@@ -478,10 +482,11 @@ func (p *Peer) writeMsg(msg Msg, timeout time.Duration) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
 	p.conn.SetWriteDeadline(time.Now().Add(timeout))
-	if err := writeMsg(p.bufconn, msg); err != nil {
+	if err := writeMsgToPacket(p.outconn, p.outconn, msg); err != nil {
 		return newPeerError(errWrite, "%v", err)
 	}
-	return p.bufconn.Flush()
+	// return p.bufconn.Flush()
+	return nil
 }
 
 type proto struct {

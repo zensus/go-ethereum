@@ -25,13 +25,6 @@ const (
 	rHSLen int = 210 // size of the final ECIES payload sent as receiver's handshake
 )
 
-// secretRW implements a message read writer with encryption and authentication
-// it is initialised by cryptoId.Run() after a successful crypto handshake
-// aesSecret, macSecret, egressMac, ingress
-type secretRW struct {
-	aesSecret, macSecret, egressMac, ingressMac []byte
-}
-
 type hexkey []byte
 
 func (self hexkey) String() string {
@@ -54,7 +47,7 @@ NewSecureSession(connection, privateKey, remotePublicKey, sessionToken, initiato
  It returns a secretRW which implements the MsgReadWriter interface.
 */
 
-func NewSecureSession(conn io.ReadWriter, prvKey *ecdsa.PrivateKey, remotePubKeyS []byte, sessionToken []byte, initiator bool) (token []byte, rw *secretRW, err error) {
+func NewSecureSession(r io.Reader, w io.Writer, prvKey *ecdsa.PrivateKey, remotePubKeyS []byte, sessionToken []byte, initiator bool) (token []byte, sr io.Reader, sw io.Writer, err error) {
 	var auth, initNonce, recNonce []byte
 	var read int
 	var randomPrivKey *ecdsa.PrivateKey
@@ -72,12 +65,12 @@ func NewSecureSession(conn io.ReadWriter, prvKey *ecdsa.PrivateKey, remotePubKey
 		randomPublicKeyS, _ := ExportPublicKey(&randomPrivKey.PublicKey)
 		clogger.Debugf("initiator-random-public-key: %v", hexkey(randomPublicKeyS))
 
-		if _, err = conn.Write(auth); err != nil {
+		if _, err = w.Write(auth); err != nil {
 			return
 		}
 		clogger.Debugf("initiator handshake (sent to %v):\n%v", hexkey(remotePubKeyS), hexkey(auth))
 		var response []byte = make([]byte, rHSLen)
-		if read, err = conn.Read(response); err != nil || read == 0 {
+		if read, err = r.Read(response); err != nil || read == 0 {
 			return
 		}
 		if read != rHSLen {
@@ -96,7 +89,7 @@ func NewSecureSession(conn io.ReadWriter, prvKey *ecdsa.PrivateKey, remotePubKey
 	} else {
 		auth = make([]byte, iHSLen)
 		clogger.Debugf("waiting for initiator handshake (from %v)", hexkey(remotePubKeyS))
-		if read, err = conn.Read(auth); err != nil {
+		if read, err = r.Read(auth); err != nil {
 			return
 		}
 		if read != iHSLen {
@@ -113,12 +106,12 @@ func NewSecureSession(conn io.ReadWriter, prvKey *ecdsa.PrivateKey, remotePubKey
 		}
 		clogger.Debugf("receiver-nonce: %v", hexkey(recNonce))
 		clogger.Debugf("receiver-random-priv-key: %v", hexkey(crypto.FromECDSA(randomPrivKey)))
-		if _, err = conn.Write(response); err != nil {
+		if _, err = w.Write(response); err != nil {
 			return
 		}
 		clogger.Debugf("receiver handshake (sent to %v):\n%v", hexkey(remotePubKeyS), hexkey(response))
 	}
-	return newSession(initiator, initNonce, recNonce, auth, randomPrivKey, remoteRandomPubKey)
+	return newSession(r, w, initiator, initNonce, recNonce, auth, randomPrivKey, remoteRandomPubKey)
 }
 
 /*
@@ -329,7 +322,7 @@ func completeHandshake(auth []byte, prvKey *ecdsa.PrivateKey) (respNonce []byte,
 /*
 newSession is called after the handshake is completed. The arguments are values negotiated in the handshake and the return value is a new session : a new session Token to be remembered for the next time we connect with this peer. And a MsgReadWriter that implements an encrypted and authenticated connection with key material obtained from the crypto handshake key exchange
 */
-func newSession(initiator bool, initNonce, respNonce, auth []byte, privKey *ecdsa.PrivateKey, remoteRandomPubKey *ecdsa.PublicKey) (sessionToken []byte, rw *secretRW, err error) {
+func newSession(r io.Reader, w io.Writer, initiator bool, initNonce, respNonce, auth []byte, privKey *ecdsa.PrivateKey, remoteRandomPubKey *ecdsa.PublicKey) (sessionToken []byte, sr io.Reader, sw io.Writer, err error) {
 	// 3) Now we can trust ecdhe-random-pubk to derive new keys
 	//ecdhe-shared-secret = ecdh.agree(ecdhe-random, remote-ecdhe-random-pubk)
 	var dhSharedSecret []byte
@@ -349,7 +342,9 @@ func newSession(initiator bool, initNonce, respNonce, auth []byte, privKey *ecds
 		egressMac = Xor(macSecret, initNonce)
 		ingressMac = Xor(macSecret, respNonce)
 	}
-	rw = &secretRW{
+	rw := &secureRW{
+		r:          r,
+		w:          w,
 		aesSecret:  aesSecret,
 		macSecret:  macSecret,
 		egressMac:  egressMac,
@@ -359,7 +354,7 @@ func newSession(initiator bool, initNonce, respNonce, auth []byte, privKey *ecds
 	clogger.Debugf("mac-secret: %v", hexkey(macSecret))
 	clogger.Debugf("egress-mac: %v", hexkey(egressMac))
 	clogger.Debugf("ingress-mac: %v", hexkey(ingressMac))
-	return
+	return sessionToken, rw, rw, nil
 }
 
 // TODO: optimisation
