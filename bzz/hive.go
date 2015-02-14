@@ -2,7 +2,8 @@ package bzz
 
 type peer struct {
 	*bzzProtocol
-	pubkey []byte
+	address    []byte
+	addressKey string
 }
 
 // This is a mock implementation with a fixed peer pool with no distinction between peers
@@ -17,15 +18,16 @@ func newHive() *hive {
 }
 
 func (self *hive) addPeer(p peer) {
-	self.pool[string(p.pubkey)] = p
+	self.pool[p.addressKey] = p
 }
 
 func (self *hive) removePeer(p peer) {
-	delete(self.pool, string(p.pubkey))
+	delete(self.pool, p.addressKey)
 }
 
 // Retrieve a list of live peers that are closer to target than us
 func (self *hive) getPeers(target Key) (peers []peer) {
+
 	for _, value := range self.pool {
 		peers = append(peers, value)
 	}

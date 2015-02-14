@@ -37,6 +37,9 @@ type bzzProtocol struct {
 	rw       p2p.MsgReadWriter
 }
 
+// time.Unix(int64(ts), 0).Before(time.Now())
+// uint64(time.Now().Add(expiration).Unix())
+
 /*
  message structs used for rlp decoding
 Handshake
@@ -233,7 +236,7 @@ func (self *bzzProtocol) handleStatus() (err error) {
 	handshake := &statusMsgData{
 		Version:   uint64(Version),
 		ID:        "honey",
-		NodeID:    self.peer.OurPubkey(),
+		NodeID:    self.peer.OurID()[:],
 		NetworkId: uint64(NetworkId),
 		Caps:      []p2p.Cap{},
 	}
@@ -273,7 +276,8 @@ func (self *bzzProtocol) handleStatus() (err error) {
 
 	self.peer.Infof("Peer is [bzz] capable (%d/%d)\n", status.Version, status.NetworkId)
 
-	self.netStore.hive.addPeer(peer{bzzProtocol: self, pubkey: status.NodeID})
+	address := self.peer.RemoteID()
+	self.netStore.hive.addPeer(peer{bzzProtocol: self, address: address[:], addressKey: string(address[:])})
 
 	return nil
 }
@@ -311,10 +315,10 @@ func (self *bzzProtocol) protoError(code int, format string, params ...interface
 func (self *bzzProtocol) protoErrorDisconnect(code int, format string, params ...interface{}) {
 	err := ProtocolError(code, format, params...)
 	if err.Fatal() {
-		self.peer.Errorln("err %v", err)
+		self.peer.Errorln("protocol error: %v", err)
 		// disconnect
 	} else {
-		self.peer.Debugf("fyi %v", err)
+		self.peer.Debugf("protocol error: %v", err)
 	}
 
 }
