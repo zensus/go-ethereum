@@ -199,6 +199,8 @@ JavaScript API. See https://github.com/ethereum/go-ethereum/wiki/Javascipt-Conso
 		utils.PreLoadJSFlag,
 		utils.WhisperEnabledFlag,
 		utils.SwarmConfigPathFlag,
+		utils.SwarmSwapDisabled,
+		utils.SwarmPortFlag,
 		utils.SwarmAccountAddrFlag,
 		utils.ChequebookAddrFlag,
 		utils.DevModeFlag,
