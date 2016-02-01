@@ -18,14 +18,48 @@
 package web3ext
 
 var Modules = map[string]string{
-	"txpool":   TxPool_JS,
-	"admin":    Admin_JS,
-	"personal": Personal_JS,
-	"eth":      Eth_JS,
-	"miner":    Miner_JS,
-	"debug":    Debug_JS,
-	"net":      Net_JS,
+	"txpool":     TxPool_JS,
+	"admin":      Admin_JS,
+	"personal":   Personal_JS,
+	"eth":        Eth_JS,
+	"miner":      Miner_JS,
+	"debug":      Debug_JS,
+	"net":        Net_JS,
+	"bzz":        Bzz_JS,
+	"chequebook": Chequebook_JS,
 }
+
+const Personal_JS = `
+web3._extend({
+	property: 'personal',
+	methods:
+	[
+		new web3._extend.Method({
+			name: 'newAccount',
+			call: 'personal_newAccount',
+			params: 1,
+			outputFormatter: web3._extend.utils.toAddress
+		}),
+		new web3._extend.Method({
+			name: 'unlockAccount',
+			call: 'personal_unlockAccount',
+			params: 3,
+		}),
+		new web3._extend.Method({
+			name: 'lockAccount',
+			call: 'personal_lockAccount',
+			params: 1
+		})
+	],
+	properties:
+	[
+		new web3._extend.Property({
+			name: 'listAccounts',
+			getter: 'personal_listAccounts'
+		})
+	]
+});
+`
 
 const TxPool_JS = `
 web3._extend({
@@ -474,5 +508,121 @@ web3._extend({
 			getter: 'shh_version'
 		})
 	]
+});
+`
+
+const Bzz_JS = `
+web3._extend({
+	property: 'bzz',
+	methods:
+	[
+		new web3._extend.Method({
+			name: 'deposit',
+			call: 'bzz_deposit',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
+			name: 'info',
+			call: 'bzz_info',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
+			name: 'cash',
+			call: 'bzz_cash',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
+			name: 'issue',
+			call: 'bzz_issue',
+			params: 2,
+			inputFormatter: [null, null]
+		}),
+		new web3._extend.Method({
+			name: 'register',
+			call: 'bzz_register',
+			params: 3,
+			inputFormatter: [null, null, null]
+		}),
+		new web3._extend.Method({
+			name: 'blockNetworkRead',
+			call: 'bzz_blockNetworkRead',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
+			name: 'resolve',
+			call: 'bzz_resolve',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
+			name: 'download',
+			call: 'bzz_download',
+			params: 2,
+			inputFormatter: [null, null]
+		}),
+		new web3._extend.Method({
+			name: 'upload',
+			call: 'bzz_upload',
+			params: 2,
+			inputFormatter: [null, null]
+		}),
+		new web3._extend.Method({
+			name: 'get',
+			call: 'bzz_get',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
+			name: 'put',
+			call: 'bzz_put',
+			params: 2,
+			inputFormatter: [null, null]
+		}),
+		new web3._extend.Method({
+			name: 'modify',
+			call: 'bzz_modify',
+			params: 4,
+			inputFormatter: [null, null, null, null]
+		})
+	],
+	properties:
+	[
+	]
+});
+`
+const Chequebook_JS = `
+web3._extend({
+  property: 'chequebook',
+  methods:
+  [
+    new web3._extend.Method({
+      name: 'deposit',
+      call: 'chequebook_deposit',
+      params: 1,
+      inputFormatter: [null]
+    }),
+    new web3._extend.Method({
+      name: 'info',
+      call: 'chequebook_info',
+      params: 1,
+      inputFormatter: [null]
+    }),
+    new web3._extend.Method({
+      name: 'cash',
+      call: 'chequebook_cash',
+      params: 1,
+      inputFormatter: [null]
+    }),
+    new web3._extend.Method({
+      name: 'issue',
+      call: 'chequebook_issue',
+      params: 2,
+      inputFormatter: [null, null]
+    }),
+  ]
 });
 `
