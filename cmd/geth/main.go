@@ -200,6 +200,7 @@ JavaScript API. See https://github.com/ethereum/go-ethereum/wiki/Javascipt-Conso
 		utils.WhisperEnabledFlag,
 		utils.SwarmConfigPathFlag,
 		utils.SwarmSwapDisabled,
+		utils.SwarmSyncDisabled,
 		utils.SwarmPortFlag,
 		utils.SwarmAccountAddrFlag,
 		utils.ChequebookAddrFlag,

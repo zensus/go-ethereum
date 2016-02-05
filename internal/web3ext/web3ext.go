@@ -553,6 +553,18 @@ web3._extend({
 			inputFormatter: [null]
 		}),
 		new web3._extend.Method({
+			name: 'syncEnabled',
+			call: 'bzz_syncEnabled',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
+			name: 'swapEnabled',
+			call: 'bzz_swapEnabled',
+			params: 1,
+			inputFormatter: [null]
+		}),
+		new web3._extend.Method({
 			name: 'resolve',
 			call: 'bzz_resolve',
 			params: 1,
@@ -605,12 +617,11 @@ web3._extend({
       params: 1,
       inputFormatter: [null]
     }),
-    new web3._extend.Method({
-      name: 'info',
-      call: 'chequebook_info',
-      params: 1,
-      inputFormatter: [null]
-    }),
+    new web3._extend.Property({
+			name: 'balance',
+			getter: 'chequebook_balance',
+				outputFormatter: web3._extend.utils.toDecimal
+		}),
     new web3._extend.Method({
       name: 'cash',
       call: 'chequebook_cash',
