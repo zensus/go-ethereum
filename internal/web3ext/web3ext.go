@@ -49,6 +49,11 @@ web3._extend({
 			name: 'lockAccount',
 			call: 'personal_lockAccount',
 			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'importRawKey',
+			call: 'personal_importRawKey',
+			params: 2
 		})
 	],
 	properties:
@@ -56,7 +61,7 @@ web3._extend({
 		new web3._extend.Property({
 			name: 'listAccounts',
 			getter: 'personal_listAccounts'
-		})
+		}),
 	]
 });
 `
@@ -205,20 +210,6 @@ web3._extend({
 		new web3._extend.Property({
 			name: 'datadir',
 			getter: 'admin_datadir'
-		})
-	]
-});
-`
-
-const Personal_JS = `
-web3._extend({
-	property: 'personal',
-	methods:
-	[
-		new web3._extend.Method({
-			name: 'importRawKey',
-			call: 'personal_importRawKey',
-			params: 2
 		})
 	]
 });
