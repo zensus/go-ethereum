@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	p2ptest "github.com/ethereum/go-ethereum/p2p/testing"
-	"github.com/ethereum/go-ethereum/swarm/network"
 	//"github.com/ethereum/go-ethereum/swarm/network"
 	whisper "github.com/ethereum/go-ethereum/whisper/whisperv5"
 )
@@ -42,10 +41,10 @@ func af() <-chan time.Time {
 // Start() starts up the hive
 // makes SimNode implement *NodeAdapter
 func (self *SimNode) Start() error {
-	connect := func(s string) error {
-		id := network.HexToBytes(s)
-		return self.Connect(id)
-	}
+	//connect := func(s string) error {
+	//	id := network.HexToBytes(s)
+	//	return self.Connect(id)
+	//}
 	return self.node.Start(nil)
 }
 
@@ -61,7 +60,7 @@ func (self *Network) NewSimNode(conf *simulations.NodeConfig) adapters.NodeAdapt
 	na := adapters.NewSimNode(id, self.Network, self.messenger)
 	wh := whisper.NewWhisper(nil, id.Bytes(), na, self.messenger)
 	self.nodes = append(self.nodes, wh)
-	codeMap := whisper.ShhCodeMap()
+	//codeMap := whisper.ShhCodeMap()
 	na.Run = whisper.Shh(wh, id.Bytes(), na, self.messenger).Run
 	return &SimNode{
 		node:        wh,
