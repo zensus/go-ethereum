@@ -373,7 +373,8 @@ func (self *Network) Connect(oneId, otherId *adapters.NodeId) error {
 	if err != nil {
 		return err
 	}
-	return self.DidConnect(oneId, otherId)
+	return nil
+	// return self.DidConnect(oneId, otherId)
 }
 
 // Disconnect(i, j) attempts to disconnect nodes i and j (args given as nodeId)
@@ -406,7 +407,8 @@ func (self *Network) Disconnect(oneId, otherId *adapters.NodeId, disconnect bool
 			return err
 		}
 	}
-	return self.DidDisconnect(oneId, otherId)
+	return nil
+	// return self.DidDisconnect(oneId, otherId)
 }
 
 func (self *Network) DidConnect(one, other *adapters.NodeId) error {

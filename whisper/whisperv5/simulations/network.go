@@ -45,13 +45,15 @@ func (self *SimNode) Start() error {
 	//	id := network.HexToBytes(s)
 	//	return self.Connect(id)
 	//}
-	return self.node.Start(nil)
+	// return self.node.Start(nil)
+	return nil
 }
 
 // Stop() shuts down the hive
 // makes SimNode implement *NodeAdapter
 func (self *SimNode) Stop() error {
-	return self.node.Stop()
+	// return self.node.Stop()
+	return nil
 }
 
 // NewSimNode creates adapters for nodes in the simulation.
