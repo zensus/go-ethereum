@@ -64,7 +64,7 @@ type Messenger interface {
 	SendMsg(p2p.MsgWriter, uint64, interface{}) error
 	ReadMsg(p2p.MsgReader) (p2p.Msg, error)
 	NewPipe() (p2p.MsgReadWriter, p2p.MsgReadWriter)
-	ClosePipe(rw p2p.MsgReadWriter)
+	Close(rw p2p.MsgReadWriter)
 }
 
 type NodeAdapter interface {

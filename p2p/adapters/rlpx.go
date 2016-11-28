@@ -41,13 +41,15 @@ func (*RLPxMessenger) ReadMsg(r p2p.MsgReader) (p2p.Msg, error) {
 	return r.ReadMsg()
 }
 
+func (*RLPxMessenger) NewPipe() (p2p.MsgReadWriter, p2p.MsgReadWriter) {
+	return nil, nil
+}
+
+func (*RLPxMessenger) Close(rw p2p.MsgReadWriter) {}
+
 func (self *RLPx) LocalAddr() []byte {
 	return self.addr
 }
-
-// func (self *RLPx) NewPeer(p *p2p.Peer, rw p2p.MsgReadWriter, ct *protocols.CodeMap) *protocols.Peer {
-// 	return protocols.NewPeer(p, rw, ct, self, func() {})
-// }
 
 func (self *RLPx) Connect(enode []byte) error {
 	// TCP/UDP node address encoded with enode url scheme

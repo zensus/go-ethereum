@@ -45,8 +45,8 @@ type Peer struct {
 // connection
 type Network interface {
 	GetNodeAdapter(id *NodeId) NodeAdapter
-	Connect(*NodeId, *NodeId, bool) error
-	Disconnect(*NodeId, *NodeId, bool) error
+	DidConnect(*NodeId, *NodeId, bool) error
+	DidDisconnect(*NodeId, *NodeId) error
 }
 
 // SimNode is the network adapter that
@@ -129,15 +129,13 @@ func (self *SimNode) Disconnect(rid []byte) error {
 	if peer == nil || peer.RW == nil {
 		return fmt.Errorf("already disconnected")
 	}
-	self.messenger.ClosePipe(peer.RW)
+	self.messenger.Close(peer.RW)
 	peer.RW = nil
 	na := self.network.GetNodeAdapter(id)
 	peer = na.(*SimNode).GetPeer(self.Id)
 	peer.RW = nil
-	self.network.Disconnect(self.Id, id, false)
-
 	glog.V(6).Infof("dropped peer %v", id)
-	return nil
+	return self.network.DidDisconnect(self.Id, id)
 }
 
 func (self *SimNode) Connect(rid []byte) error {
@@ -151,11 +149,16 @@ func (self *SimNode) Connect(rid []byte) error {
 	rw, rrw := self.messenger.NewPipe()
 	// run protocol on remote node with self as peer
 	// peer := p2p.NewPeer(self.Id.NodeID, Name(self.Id.Bytes()), []p2p.Cap{})
-	na.RunProtocol(self.Id, rrw, rw)
+	err := na.RunProtocol(self.Id, rrw, rw)
+	if err != nil {
+		return fmt.Errorf("cannot run protocol (%v -> %v) %v", self.Id, id, err)
+	}
 	// run protocol on remote node with self as peer
-	self.RunProtocol(id, rw, rrw)
-	self.network.Connect(self.Id, id, false)
-	return nil
+	err = self.RunProtocol(id, rw, rrw)
+	if err != nil {
+		return fmt.Errorf("cannot run protocol (%v -> %v): %v", id, self.Id, err)
+	}
+	return self.network.DidConnect(self.Id, id, false)
 }
 
 func (self *SimNode) RunProtocol(id *NodeId, rw, rrw p2p.MsgReadWriter) error {
@@ -164,10 +167,8 @@ func (self *SimNode) RunProtocol(id *NodeId, rw, rrw p2p.MsgReadWriter) error {
 		return nil
 	}
 	glog.V(6).Infof("protocol starting on peer %v (connection with %v)", self.Id, id)
-	glog.V(6).Infof("adapter connect %v to peer %v, setting pipe", self.Id, id)
 	peer := self.getPeer(id)
 	if peer != nil && peer.RW != nil {
-		glog.V(6).Infof("already connecting %v to peer %v", self.Id, id)
 		return fmt.Errorf("already connecting %v to peer %v", self.Id, id)
 	}
 	peer = self.setPeer(id, rrw)

@@ -37,7 +37,7 @@ func (*SimPipe) NewPipe() (p2p.MsgReadWriter, p2p.MsgReadWriter) {
 	return p2p.MsgPipe()
 }
 
-func (*SimPipe) ClosePipe(rw p2p.MsgReadWriter) {
+func (*SimPipe) Close(rw p2p.MsgReadWriter) {
 	rw.(*p2p.MsgPipeRW).Close()
 }
 
