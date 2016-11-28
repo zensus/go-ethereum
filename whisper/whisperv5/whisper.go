@@ -22,6 +22,7 @@ import (
 	crand "crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	mrand "math/rand"
 	"sync"
 	"time"
 
@@ -30,7 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"golang.org/x/crypto/pbkdf2"
 	set "gopkg.in/fatih/set.v0"
 )
@@ -61,7 +62,7 @@ type Whisper struct {
 
 // New creates a Whisper client ready to communicate through the Ethereum P2P network.
 // Param s should be passed if you want to implement mail server, otherwise nil.
-func NewWhisper(server MailServer) *Whisper {
+func NewWhisper(server MailServer, localAddr []byte, na adapters.NodeAdapter, m adapters.Messenger) *Whisper {
 	whisper := &Whisper{
 		privateKeys: make(map[string]*ecdsa.PrivateKey),
 		symKeys:     make(map[string][]byte),
@@ -73,14 +74,10 @@ func NewWhisper(server MailServer) *Whisper {
 		quit:        make(chan struct{}),
 	}
 	whisper.filters = NewFilters(whisper)
+	whisper.protocol = Shh(whisper, localAddr, na, m)
 
-	// p2p whisper sub protocol handler
-	whisper.protocol = p2p.Protocol{
-		Name:    ProtocolName,
-		Version: uint(ProtocolVersion),
-		Length:  NumberOfMessageCodes,
-		Run:     whisper.HandlePeer,
-	}
+	seed := time.Now().Unix()
+	mrand.Seed(seed)
 
 	return whisper
 }
@@ -116,23 +113,6 @@ func (w *Whisper) MarkPeerTrusted(peerID []byte) error {
 	}
 	p.trusted = true
 	return nil
-}
-
-func (w *Whisper) RequestHistoricMessages(peerID []byte, data []byte) error {
-	p, err := w.getPeer(peerID)
-	if err != nil {
-		return err
-	}
-	p.trusted = true
-	return p2p.Send(p.ws, mailRequestCode, data)
-}
-
-func (w *Whisper) SendP2PMessage(peerID []byte, envelope *Envelope) error {
-	p, err := w.getPeer(peerID)
-	if err != nil {
-		return err
-	}
-	return p2p.Send(p.ws, p2pCode, envelope)
 }
 
 // NewIdentity generates a new cryptographic identity for the client, and injects
@@ -177,12 +157,23 @@ func (w *Whisper) GetIdentity(pubKey string) *ecdsa.PrivateKey {
 }
 
 func (w *Whisper) GenerateSymKey(name string) error {
-	buf := make([]byte, aesKeyLength*2)
-	_, err := crand.Read(buf) // todo: check how safe is this function
+	const size = aesKeyLength * 2
+	buf := make([]byte, size)
+	buf2 := make([]byte, size)
+	_, err := crand.Read(buf)
 	if err != nil {
 		return err
 	} else if !validateSymmetricKey(buf) {
-		return fmt.Errorf("crypto/rand failed to generate random data")
+		return fmt.Errorf("error in GenerateSymKey: crypto/rand failed to generate random data")
+	}
+
+	randomize(buf2)
+	if !validateSymmetricKey(buf2) {
+		return fmt.Errorf("error in GenerateSymKey: math/rand failed to generate random data")
+	}
+
+	for i := 0; i < size; i++ {
+		buf[i] ^= buf2[i]
 	}
 
 	key := buf[:aesKeyLength]
@@ -245,16 +236,16 @@ func (w *Whisper) GetSymKey(name string) []byte {
 
 // Watch installs a new message handler to run in case a matching packet arrives
 // from the whisper network.
-func (w *Whisper) Watch(f *Filter) int {
+func (w *Whisper) Watch(f *Filter) uint32 {
 	return w.filters.Install(f)
 }
 
-func (w *Whisper) GetFilter(id int) *Filter {
+func (w *Whisper) GetFilter(id uint32) *Filter {
 	return w.filters.Get(id)
 }
 
 // Unwatch removes an installed message handler.
-func (w *Whisper) Unwatch(id int) {
+func (w *Whisper) Unwatch(id uint32) {
 	w.filters.Uninstall(id)
 }
 
@@ -278,98 +269,6 @@ func (w *Whisper) Stop() error {
 	close(w.quit)
 	glog.V(logger.Info).Infoln("Whisper stopped")
 	return nil
-}
-
-// handlePeer is called by the underlying P2P layer when the whisper sub-protocol
-// connection is negotiated.
-func (wh *Whisper) HandlePeer(peer *p2p.Peer, rw p2p.MsgReadWriter) error {
-	// Create the new peer and start tracking it
-	whisperPeer := newPeer(wh, peer, rw)
-
-	wh.peerMu.Lock()
-	wh.peers[whisperPeer] = struct{}{}
-	wh.peerMu.Unlock()
-
-	defer func() {
-		wh.peerMu.Lock()
-		delete(wh.peers, whisperPeer)
-		wh.peerMu.Unlock()
-	}()
-
-	// Run the peer handshake and state updates
-	if err := whisperPeer.handshake(); err != nil {
-		return err
-	}
-	whisperPeer.start()
-	defer whisperPeer.stop()
-
-	return wh.runMessageLoop(whisperPeer, rw)
-}
-
-// runMessageLoop reads and processes inbound messages directly to merge into client-global state.
-func (wh *Whisper) runMessageLoop(p *Peer, rw p2p.MsgReadWriter) error {
-	for {
-		// fetch the next packet
-		packet, err := rw.ReadMsg()
-		if err != nil {
-			return err
-		}
-
-		switch packet.Code {
-		case statusCode:
-			// this should not happen, but no need to panic; just ignore this message.
-			glog.V(logger.Warn).Infof("%v: unxepected status message received", p.peer)
-		case messagesCode:
-			// decode the contained envelopes
-			var envelopes []*Envelope
-			if err := packet.Decode(&envelopes); err != nil {
-				glog.V(logger.Warn).Infof("%v: failed to decode envelope: [%v], peer will be disconnected", p.peer, err)
-				return fmt.Errorf("garbage received")
-			}
-			// inject all envelopes into the internal pool
-			for _, envelope := range envelopes {
-				if err := wh.add(envelope); err != nil {
-					glog.V(logger.Warn).Infof("%v: bad envelope received: [%v], peer will be disconnected", p.peer, err)
-					return fmt.Errorf("invalid envelope")
-				}
-				p.mark(envelope)
-				if wh.mailServer != nil {
-					wh.mailServer.Archive(envelope)
-				}
-			}
-		case p2pCode:
-			// peer-to-peer message, sent directly to peer bypassing PoW checks, etc.
-			// this message is not supposed to be forwarded to other peers, and
-			// therefore might not satisfy the PoW, expiry and other requirements.
-			// these messages are only accepted from the trusted peer.
-			if p.trusted {
-				var envelopes []*Envelope
-				if err := packet.Decode(&envelopes); err != nil {
-					glog.V(logger.Warn).Infof("%v: failed to decode direct message: [%v], peer will be disconnected", p.peer, err)
-					return fmt.Errorf("garbage received (directMessage)")
-				}
-				for _, envelope := range envelopes {
-					wh.postEvent(envelope, p2pCode)
-				}
-			}
-		case mailRequestCode:
-			// Must be processed if mail server is implemented. Otherwise ignore.
-			if wh.mailServer != nil {
-				s := rlp.NewStream(packet.Payload, uint64(packet.Size))
-				data, err := s.Bytes()
-				if err == nil {
-					wh.mailServer.DeliverMail(p, data)
-				} else {
-					glog.V(logger.Error).Infof("%v: bad requestHistoricMessages received: [%v]", p.peer, err)
-				}
-			}
-		default:
-			// New message types might be implemented in the future versions of Whisper.
-			// For forward compatibility, just ignore.
-		}
-
-		packet.Discard()
-	}
 }
 
 // add inserts a new envelope into the message pool to be distributed within the
@@ -404,7 +303,7 @@ func (wh *Whisper) add(envelope *Envelope) error {
 		return fmt.Errorf("oversized Version")
 	}
 
-	if len(envelope.AESNonce) > 12 {
+	if len(envelope.AESNonce) > AESNonceMaxLength {
 		// the standard AES GSM nonce size is 12,
 		// but const gcmStandardNonceSize cannot be accessed directly
 		return fmt.Errorf("oversized AESNonce")
@@ -507,7 +406,7 @@ func (w *Whisper) Envelopes() []*Envelope {
 }
 
 // Messages retrieves all the decrypted messages matching a filter id.
-func (w *Whisper) Messages(id int) []*ReceivedMessage {
+func (w *Whisper) Messages(id uint32) []*ReceivedMessage {
 	result := make([]*ReceivedMessage, 0)
 	w.poolMu.RLock()
 	defer w.poolMu.RUnlock()

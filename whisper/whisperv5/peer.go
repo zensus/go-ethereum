@@ -24,14 +24,14 @@ import (
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/p2p/protocols"
 	set "gopkg.in/fatih/set.v0"
 )
 
 // peer represents a whisper protocol peer connection.
 type Peer struct {
 	host    *Whisper
-	peer    *p2p.Peer
+	peer    *protocols.Peer
 	ws      p2p.MsgReadWriter
 	trusted bool
 
@@ -41,11 +41,10 @@ type Peer struct {
 }
 
 // newPeer creates a new whisper peer object, but does not run the handshake itself.
-func newPeer(host *Whisper, remote *p2p.Peer, rw p2p.MsgReadWriter) *Peer {
+func newPeer(host *Whisper, remote *protocols.Peer) *Peer {
 	return &Peer{
 		host:    host,
 		peer:    remote,
-		ws:      rw,
 		trusted: false,
 		known:   set.New(),
 		quit:    make(chan struct{}),
@@ -65,33 +64,40 @@ func (p *Peer) stop() {
 	glog.V(logger.Debug).Infof("%v: whisper stopped", p.peer)
 }
 
-// handshake sends the protocol initiation status message to the remote peer and
-// verifies the remote status too.
-func (p *Peer) handshake() error {
-	// Send the handshake status message asynchronously
-	errc := make(chan error, 1)
-	go func() {
-		errc <- p2p.Send(p.ws, statusCode, ProtocolVersion)
-	}()
-	// Fetch the remote status packet and verify protocol match
-	packet, err := p.ws.ReadMsg()
-	if err != nil {
-		return err
-	}
-	if packet.Code != statusCode {
-		return fmt.Errorf("peer sent %x before status packet", packet.Code)
-	}
-	s := rlp.NewStream(packet.Payload, uint64(packet.Size))
-	peerVersion, err := s.Uint()
-	if err != nil {
-		return fmt.Errorf("bad status message: %v", err)
-	}
+// // handshake sends the protocol initiation status message to the remote peer and
+// // verifies the remote status too.
+// func (p *Peer) handshake() error {
+// 	// Send the handshake status message asynchronously
+// 	errc := make(chan error, 1)
+// 	go func() {
+// 		errc <- p2p.Send(p.ws, statusCode, ProtocolVersion)
+// 	}()
+// 	// Fetch the remote status packet and verify protocol match
+// 	packet, err := p.ws.ReadMsg()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if packet.Code != statusCode {
+// 		return fmt.Errorf("peer sent %x before status packet", packet.Code)
+// 	}
+// 	s := rlp.NewStream(packet.Payload, uint64(packet.Size))
+// 	peerVersion, err := s.Uint()
+// 	if err != nil {
+// 		return fmt.Errorf("bad status message: %v", err)
+// 	}
+// 	if peerVersion != ProtocolVersion {
+// 		return fmt.Errorf("protocol version mismatch %d != %d", peerVersion, ProtocolVersion)
+// 	}
+// 	// Wait until out own status is consumed too
+// 	if err := <-errc; err != nil {
+// 		return fmt.Errorf("failed to send status packet: %v", err)
+// 	}
+// 	return nil
+// }
+
+func checkShhHandshake(peerVersion uint64) error {
 	if peerVersion != ProtocolVersion {
 		return fmt.Errorf("protocol version mismatch %d != %d", peerVersion, ProtocolVersion)
-	}
-	// Wait until out own status is consumed too
-	if err := <-errc; err != nil {
-		return fmt.Errorf("failed to send status packet: %v", err)
 	}
 	return nil
 }
@@ -166,7 +172,7 @@ func (p *Peer) broadcast() error {
 		}
 	}
 	// Transmit the unknown batch (potentially empty)
-	if err := p2p.Send(p.ws, messagesCode, transmit); err != nil {
+	if err := p.peer.Send(&envelopesMsg{Envelopes: transmit}); err != nil {
 		return err
 	}
 	glog.V(logger.Detail).Infoln(p.peer, "broadcasted", len(transmit), "message(s)")
