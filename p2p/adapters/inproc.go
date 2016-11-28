@@ -131,9 +131,9 @@ func (self *SimNode) Disconnect(rid []byte) error {
 	}
 	self.messenger.Close(peer.RW)
 	peer.RW = nil
-	na := self.network.GetNodeAdapter(id)
-	peer = na.(*SimNode).GetPeer(self.Id)
-	peer.RW = nil
+	// na := self.network.GetNodeAdapter(id)
+	// peer = na.(*SimNode).GetPeer(self.Id)
+	// peer.RW = nil
 	glog.V(6).Infof("dropped peer %v", id)
 	return self.network.DidDisconnect(self.Id, id)
 }
