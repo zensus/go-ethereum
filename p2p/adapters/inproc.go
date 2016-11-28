@@ -45,7 +45,7 @@ type Peer struct {
 // connection
 type Network interface {
 	GetNodeAdapter(id *NodeId) NodeAdapter
-	DidConnect(*NodeId, *NodeId, bool) error
+	DidConnect(*NodeId, *NodeId) error
 	DidDisconnect(*NodeId, *NodeId) error
 }
 
@@ -131,9 +131,9 @@ func (self *SimNode) Disconnect(rid []byte) error {
 	}
 	self.messenger.Close(peer.RW)
 	peer.RW = nil
-	na := self.network.GetNodeAdapter(id)
-	peer = na.(*SimNode).GetPeer(self.Id)
-	peer.RW = nil
+	// na := self.network.GetNodeAdapter(id)
+	// peer = na.(*SimNode).GetPeer(self.Id)
+	// peer.RW = nil
 	glog.V(6).Infof("dropped peer %v", id)
 	return self.network.DidDisconnect(self.Id, id)
 }
@@ -158,7 +158,7 @@ func (self *SimNode) Connect(rid []byte) error {
 	if err != nil {
 		return fmt.Errorf("cannot run protocol (%v -> %v): %v", id, self.Id, err)
 	}
-	return self.network.DidConnect(self.Id, id, false)
+	return self.network.DidConnect(self.Id, id)
 }
 
 func (self *SimNode) RunProtocol(id *NodeId, rw, rrw p2p.MsgReadWriter) error {

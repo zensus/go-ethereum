@@ -344,7 +344,7 @@ func (self *Network) Stop(id *adapters.NodeId) error {
 // Connect(i, j) attempts to connect nodes i and j (args given as nodeId)
 // calling the node's nodadapters Connect method
 // connection is established (as if) the first node dials out to the other
-func (self *Network) Connect(oneId, otherId *adapters.NodeId, connect bool) error {
+func (self *Network) Connect(oneId, otherId *adapters.NodeId) error {
 	conn, err := self.GetOrCreateConn(oneId, otherId)
 	if err != nil {
 		return err
@@ -365,20 +365,15 @@ func (self *Network) Connect(oneId, otherId *adapters.NodeId, connect bool) erro
 	// any other way of connection (like peerpool) will need to call back
 	// to this method with connect = false to avoid infinite recursion
 	// this is not relevant for nodes starting up (which can only be externally triggered)
-	if connect {
-		if rev {
-			err = conn.other.na.Connect(oneId.Bytes())
-		} else {
-			err = conn.one.na.Connect(otherId.Bytes())
-		}
-		if err != nil {
-			return err
-		}
+	if rev {
+		err = conn.other.na.Connect(oneId.Bytes())
+	} else {
+		err = conn.one.na.Connect(otherId.Bytes())
 	}
-	conn.Up = true
-	// connection event posted
-	self.events.Post(conn.event(true, rev))
-	return nil
+	if err != nil {
+		return err
+	}
+	return self.DidConnect(oneId, otherId)
 }
 
 // Disconnect(i, j) attempts to disconnect nodes i and j (args given as nodeId)
@@ -411,11 +406,21 @@ func (self *Network) Disconnect(oneId, otherId *adapters.NodeId, disconnect bool
 			return err
 		}
 	}
-	conn.Reverse = rev
-	conn.Up = false
-	self.events.Post(conn.event(false, rev))
-	conn.other.na.Disconnect(oneId.Bytes())
-	conn.one.na.Disconnect(otherId.Bytes())
+	return self.DidDisconnect(oneId, otherId)
+}
+
+func (self *Network) DidConnect(one, other *adapters.NodeId) error {
+	conn := self.GetConn(one, other)
+	if conn == nil {
+		return fmt.Errorf("connection between %v and %v does not exist", one, other)
+	}
+	if conn.Up {
+		return fmt.Errorf("%v and %v already connected", one, other)
+	}
+	conn.Reverse = conn.One.NodeID != one.NodeID
+	conn.Up = true
+	// connection event posted
+	self.events.Post(conn.event(true, conn.Reverse))
 	return nil
 }
 
