@@ -11,12 +11,12 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	p2ptest "github.com/ethereum/go-ethereum/p2p/testing"
-	//"github.com/ethereum/go-ethereum/swarm/network"
 	whisper "github.com/ethereum/go-ethereum/whisper/whisperv5"
 )
 
@@ -117,6 +117,33 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 							panic(err.Error())
 						}
 					}
+
+					sender := whnet.nodes[0]
+					recip := whnet.nodes[5]
+					rid, err := crypto.GenerateKey()
+					if err != nil {
+						return struct{}{}, fmt.Errorf("generate failed")
+					}
+					f := whisper.Filter{KeyAsym: rid}
+					fid := recip.Watch(&f)
+					go func() {
+						for {
+							time.Sleep(time.Millisecond * 100)
+							msgs := recip.Messages(fid)
+							if len(msgs) != 0 {
+								glog.V(3).Infof("received message: %s", string(msgs[0].Payload))
+								break
+							}
+						}
+					}()
+
+					opt := whisper.MessageParams{Dst: &rid.PublicKey, PoW: 10, Payload: []byte("helloworld")}
+					m := whisper.NewSentMessage(&opt)
+					envelope, err := m.Wrap(&opt)
+					if err != nil {
+						panic("failed to seal message.")
+					}
+					sender.Send(envelope)
 					return struct{}{}, nil
 				},
 				Type: reflect.TypeOf(&simulations.NetworkConfig{}),
@@ -138,7 +165,7 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 // var server
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	glog.SetV(6)
+	glog.SetV(5)
 	glog.SetToStderr(true)
 
 	c, quitc := NewSessionController()
