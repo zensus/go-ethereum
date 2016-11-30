@@ -171,6 +171,9 @@ func (p *Peer) broadcast() error {
 			p.mark(envelope)
 		}
 	}
+	if len(transmit) == 0 {
+		return nil
+	}
 	// Transmit the unknown batch (potentially empty)
 	if err := p.peer.Send(&envelopesMsg{Envelopes: transmit}); err != nil {
 		return err

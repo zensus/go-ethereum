@@ -291,6 +291,7 @@ func (wh *Whisper) add(envelope *Envelope) error {
 		if envelope.Expiry+SynchAllowance*2 < now {
 			return fmt.Errorf("very old message")
 		} else {
+			glog.V(TestDebug).Infof("expired envelope dropped")
 			return nil // drop envelope without error
 		}
 	}
@@ -314,7 +315,7 @@ func (wh *Whisper) add(envelope *Envelope) error {
 	}
 
 	if envelope.PoW() < MinimumPoW && !wh.test {
-		glog.V(logger.Debug).Infof("envelope with low PoW dropped: %f", envelope.PoW())
+		glog.V(TestDebug).Infof("envelope with low PoW dropped: %f", envelope.PoW())
 		return nil // drop envelope without error
 	}
 
@@ -334,10 +335,10 @@ func (wh *Whisper) add(envelope *Envelope) error {
 	wh.poolMu.Unlock()
 
 	if alreadyCached {
-		glog.V(logger.Detail).Infof("whisper envelope already cached: %x\n", envelope)
+		glog.V(logger.Detail).Infof("whisper envelope already cached: %x\n", hash)
 	} else {
 		wh.postEvent(envelope, messagesCode) // notify the local node about the new message
-		glog.V(logger.Detail).Infof("cached whisper envelope %v\n", envelope)
+		glog.V(logger.Detail).Infof("cached whisper envelope %x\n", hash)
 	}
 	return nil
 }

@@ -68,6 +68,8 @@ const (
 
 	DefaultTTL     = 50 // seconds
 	SynchAllowance = 10 // seconds
+
+	TestDebug = 1
 )
 
 type unknownVersionError uint64

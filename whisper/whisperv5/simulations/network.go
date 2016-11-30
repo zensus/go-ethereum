@@ -133,19 +133,27 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 							time.Sleep(time.Millisecond * 100)
 							msgs := recip.Messages(fid)
 							if len(msgs) != 0 {
-								glog.V(3).Infof("received message: %s", string(msgs[0].Payload))
+								glog.V(whisper.TestDebug).Infof("received message >>>>>>>>>>>> %s", string(msgs[0].Payload))
 								break
 							}
 						}
 					}()
 
-					opt := whisper.MessageParams{Dst: &rid.PublicKey, PoW: 10, Payload: []byte("helloworld")}
+					opt := whisper.MessageParams{Dst: &rid.PublicKey, WorkTime: 2, PoW: 10.01, Payload: []byte("hello, world! xx")}
 					m := whisper.NewSentMessage(&opt)
 					envelope, err := m.Wrap(&opt)
 					if err != nil {
 						panic("failed to seal message.")
 					}
-					sender.Send(envelope)
+
+					envelope.PoW()
+					envelope.Hash()
+					glog.V(whisper.TestDebug).Infof("wrapped envelope: %v", envelope)
+
+					err = sender.Send(envelope)
+					if err != nil {
+						glog.V(whisper.TestDebug).Infof("failed to send envelope [%x]: %s", envelope.Hash(), err)
+					}
 					return struct{}{}, nil
 				},
 				Type: reflect.TypeOf(&simulations.NetworkConfig{}),
@@ -167,7 +175,7 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 // var server
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	glog.SetV(5)
+	glog.SetV(3)
 	glog.SetToStderr(true)
 
 	c, quitc := NewSessionController()
