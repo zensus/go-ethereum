@@ -406,6 +406,18 @@ func (w *Whisper) Envelopes() []*Envelope {
 	return all
 }
 
+// AllMessages retrieves all the messages decrypted by the node.
+func (w *Whisper) AllMessages() []*ReceivedMessage {
+	w.poolMu.RLock()
+	defer w.poolMu.RUnlock()
+
+	all := make([]*ReceivedMessage, 0, len(w.messages))
+	for _, m := range w.messages {
+		all = append(all, m)
+	}
+	return all
+}
+
 // Messages retrieves all the decrypted messages matching a filter id.
 func (w *Whisper) Messages(id uint32) []*ReceivedMessage {
 	result := make([]*ReceivedMessage, 0)

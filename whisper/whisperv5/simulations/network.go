@@ -20,65 +20,6 @@ import (
 	whisper "github.com/ethereum/go-ethereum/whisper/whisperv5"
 )
 
-// Network extends simulations.Network with hives for each node.
-type Network struct {
-	*simulations.Network
-	nodes     []*whisper.Whisper
-	messenger *adapters.SimPipe
-}
-
-// SimNode is the adapter used by Swarm simulations.
-type SimNode struct {
-	node *whisper.Whisper
-	adapters.NodeAdapter
-}
-
-// the hive update ticker for hive
-func af() <-chan time.Time {
-	return time.NewTicker(5 * time.Second).C
-}
-
-// Start() starts up the hive
-// makes SimNode implement *NodeAdapter
-func (self *SimNode) Start() error {
-	//connect := func(s string) error {
-	//	id := network.HexToBytes(s)
-	//	return self.Connect(id)
-	//}
-	// return self.node.Start(nil)
-	return nil
-}
-
-// Stop() shuts down the hive
-// makes SimNode implement *NodeAdapter
-func (self *SimNode) Stop() error {
-	// return self.node.Stop()
-	return nil
-}
-
-// NewSimNode creates adapters for nodes in the simulation.
-func (self *Network) NewSimNode(conf *simulations.NodeConfig) adapters.NodeAdapter {
-	id := conf.Id
-	na := adapters.NewSimNode(id, self.Network, self.messenger)
-	wh := whisper.NewWhisper(nil, id.Bytes(), na, self.messenger)
-	self.nodes = append(self.nodes, wh)
-	//codeMap := whisper.ShhCodeMap()
-	na.Run = whisper.Shh(wh, id.Bytes(), na, self.messenger).Run
-	return &SimNode{
-		node:        wh,
-		NodeAdapter: na,
-	}
-}
-
-func NewNetwork(network *simulations.Network, messenger *adapters.SimPipe) *Network {
-	n := &Network{
-		Network:   network,
-		messenger: messenger,
-	}
-	n.SetNaf(n.NewSimNode)
-	return n
-}
-
 // NewSessionController sits as the top-most controller for this simulation
 // creates an inprocess simulation of basic node running their own bzz+hive
 func NewSessionController() (*simulations.ResourceController, chan bool) {
@@ -100,7 +41,9 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 					if parent != nil {
 						parent.SetResource(conf.Id, c)
 					}
-					ids := p2ptest.RandomNodeIds(10)
+					const NumNodes = 32
+					const RecipId = NumNodes - 1
+					ids := p2ptest.RandomNodeIds(NumNodes)
 					for _, id := range ids {
 						whnet.NewNode(&simulations.NodeConfig{Id: id})
 						whnet.Start(id)
@@ -108,9 +51,12 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 					}
 					// the nodes only know about their 2 neighbours (cyclically)
 					for i, id := range ids {
+						if i == RecipId {
+							continue
+						}
 						var peerId *adapters.NodeId
 						if i == 0 {
-							peerId = ids[len(ids)-1]
+							peerId = ids[len(ids)-2]
 						} else {
 							peerId = ids[i-1]
 						}
@@ -121,7 +67,7 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 					}
 
 					sender := whnet.nodes[0]
-					recip := whnet.nodes[5]
+					recip := whnet.nodes[RecipId]
 					rid, err := crypto.GenerateKey()
 					if err != nil {
 						return struct{}{}, fmt.Errorf("generate failed")
@@ -133,27 +79,41 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 							time.Sleep(time.Millisecond * 100)
 							msgs := recip.Messages(fid)
 							if len(msgs) != 0 {
-								glog.V(whisper.TestDebug).Infof("received message >>>>>>>>>>>> %s", string(msgs[0].Payload))
+								glog.V(whisper.TestDebug).Infof("decrypted message: [%s] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", string(msgs[0].Payload))
 								break
+							}
+						}
+
+						for i, n := range whnet.nodes {
+							mail := n.AllMessages()
+							if i != RecipId && len(mail) != 0 {
+								panic("wrong message received")
 							}
 						}
 					}()
 
-					opt := whisper.MessageParams{Dst: &rid.PublicKey, WorkTime: 2, PoW: 10.01, Payload: []byte("hello, world! xx")}
+					opt := whisper.MessageParams{Dst: &rid.PublicKey, WorkTime: 2, PoW: 10.01, Payload: []byte("wtf? why do send this bullshit??")}
 					m := whisper.NewSentMessage(&opt)
 					envelope, err := m.Wrap(&opt)
 					if err != nil {
 						panic("failed to seal message.")
 					}
 
-					envelope.PoW()
-					envelope.Hash()
-					glog.V(whisper.TestDebug).Infof("wrapped envelope: %v", envelope)
+					//envelope.PoW()
+					//envelope.Hash()
+					//glog.V(whisper.TestDebug).Infof("wrapped envelope: %v", envelope)
 
 					err = sender.Send(envelope)
 					if err != nil {
 						glog.V(whisper.TestDebug).Infof("failed to send envelope [%x]: %s", envelope.Hash(), err)
 					}
+
+					time.Sleep(time.Second * 2)
+					err = whnet.Connect(ids[RecipId], ids[NumNodes-2])
+					if err != nil {
+						panic(err.Error())
+					}
+
 					return struct{}{}, nil
 				},
 				Type: reflect.TypeOf(&simulations.NetworkConfig{}),
@@ -175,7 +135,7 @@ func NewSessionController() (*simulations.ResourceController, chan bool) {
 // var server
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	glog.SetV(3)
+	glog.SetV(6)
 	glog.SetToStderr(true)
 
 	c, quitc := NewSessionController()
@@ -183,5 +143,4 @@ func main() {
 	simulations.StartRestApiServer("8888", c)
 	// wait until server shuts down
 	<-quitc
-
 }
