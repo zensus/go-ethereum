@@ -1,8 +1,11 @@
+// +build none
+
+// You can run this simulation using
+//
+//    go run .whisper/whisperv5/simulations/network.go
 package main
 
 import (
-	"time"
-
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	whisper "github.com/ethereum/go-ethereum/whisper/whisperv5"
@@ -19,11 +22,6 @@ type Network struct {
 type SimNode struct {
 	node *whisper.Whisper
 	adapters.NodeAdapter
-}
-
-// the hive update ticker for hive
-func af() <-chan time.Time {
-	return time.NewTicker(5 * time.Second).C
 }
 
 // Start() starts up the hive
