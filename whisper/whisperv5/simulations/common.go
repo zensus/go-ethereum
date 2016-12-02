@@ -21,11 +21,6 @@ type SimNode struct {
 	adapters.NodeAdapter
 }
 
-// the hive update ticker for hive
-func af() <-chan time.Time {
-	return time.NewTicker(5 * time.Second).C
-}
-
 // Start() starts up the hive
 // makes SimNode implement *NodeAdapter
 func (self *SimNode) Start() error {
