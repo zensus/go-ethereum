@@ -29,9 +29,19 @@ import (
 type RLPx struct {
 	net  *p2p.Server
 	addr []byte
+	m    Messenger
 }
 
 type RLPxMessenger struct{}
+
+func NewRLPx(addr []byte, srv *p2p.Server, m Messenger, cluster bool) {
+	return &RLPx{
+		net:     srv,
+		addr:    addr,
+		m:       m,
+		cluster: bool,
+	}
+}
 
 func (*RLPxMessenger) SendMsg(w p2p.MsgWriter, code uint64, msg interface{}) error {
 	return p2p.Send(w, code, msg)
@@ -62,8 +72,17 @@ func (self *RLPx) Connect(enode []byte) error {
 	return nil
 }
 
-func (self *RLPx) Disconnect(p *p2p.Peer, rw p2p.MsgReadWriter) {
+func (self *RLPx) Messenger() Messenger {
+	return self.m
+}
+
+func (self *RLPx) RunProtocol(p *p2p.Peer, rw p2p.MsgReadWriter) error {
+	return nil
+}
+
+func (self *RLPx) Disconnect(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 	p.Disconnect(p2p.DiscSubprotocolError)
+	return self.network.DidDisconnect(self.Id, id)
 }
 
 // ParseAddr take two arguments, advertised in handshake and the one set on the peer struct

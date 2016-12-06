@@ -51,3 +51,7 @@ func (self *RemoteNode) Connect(rid []byte) error {
 	cmd := fmt.Sprintf(`admin.addPeer("%v")`, string(rid))
 	return self.inject(cmd)
 }
+
+func (self *RemoteNode) RunProtocol(id *NodeId, rw, rrw p2p.MsgReadWriter) error {
+	return nil
+}
