@@ -103,6 +103,16 @@ func canWeAccessKubernetes(conf kubeConfig) {
 	//and then we must do an os.exec versionCommand.Assemble() and see the return value.
 }
 
+func activateKubernetesProxy(conf kubeConfig) {
+	//test if the proxy is already running. If not start it:
+	startProxy = newKubeCommand(conf, "proxy –api-prefix=/")
+	//then execute the command and check..
+}
+func canWeAccessKubernetesProxy() {
+	//this function should query the proxy 'kubectl version' too see if there are any errors in accessing the cluster
+	//we must try to load http://127.0.0.1:8001/api/
+}
+
 //Kubernetes orchestrates 'pods' which contain docker containers for swarm.
 // To control the swarm processes we must be able to access the pods and inject commands
 
@@ -132,6 +142,13 @@ func getBzzdPodNames(cluster cluster) (runningPods []string) {
 	getPods = newKubeCommand(cluster, "get pods -o custom-columns=NAME:.metadata.name | grep bzzd")
 	//then we must execute that command ... possibly wrap it in bash because of the pipe.
 	//if all ok the output is one pod-name per line.
+	//
+	//UPDATE: using the kubectl proxy we can get pods (as JSON object) from
+	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods
+	//or all bzzd pods
+	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods?labelSelector=app%3Dbzzd
+	//or a specific pod
+	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods?labelSelector=appn%3Dbzzd-30400
 }
 
 func getBzzdPodName(cluster cluster, id int) (podName string) {
@@ -141,6 +158,8 @@ func getBzzdPodName(cluster cluster, id int) (podName string) {
 	//if all ok the output is one pod-name of the form bzzd-30399-3196715608-ub01i
 	//we read and parse the output and if all ok, return the name
 	return podName
+	//UPDATE: using the kubectl proxy we can get pod names (from JSON object) from
+	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods?labelSelector=appn%3Dbzzd-30400
 }
 
 func getBzzdConfig(cluster cluster, id int) (bzzdConfig string) {
@@ -149,6 +168,7 @@ func getBzzdConfig(cluster cluster, id int) (bzzdConfig string) {
 	cmd = "get deployment bzzd-" + id + " -o json"
 	getDeploymentJson = newKubeCommand(cluster, cmd)
 	//then execute getDeploymentJson and parse the returned string
+	//Note: cannot get deployments on kubectl proxy.
 }
 
 func restartBzzd(cluster cluster, id int) {
