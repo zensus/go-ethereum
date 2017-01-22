@@ -2,15 +2,12 @@ package adapters
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
-)
-
-import (
-	"flag"
-	"github.com/vharitonsky/iniflags" // https://stackoverflow.com/questions/16465705/how-to-handle-configuration-in-go
 )
 
 var (
@@ -23,38 +20,24 @@ type commandObject interface {
 }
 
 //A string is a trivial command object
-func (self string) Assemble() (commandString string) {
-	return self
+
+type commandString string
+
+func (self commandString) Assemble() string {
+	return string(self)
 }
 
-func executeCommand(cmd commandObject) {
-	//TODO
-	//call an os.exec on cmd.Assemble()
-	//possibly read and parse the output and return either an error or the output as a string
-}
-
-//We want to issue commands to the bzzd console in the various swarm nodes
-//These commands must be injected to the console using geth attached to the swarm IPC.
-
-//bzzdCommands use geth to inject commands into the bzzd console
-type bzzdCommand struct {
-	ipc      string        "the IPC path. Example /bzzd.ipc"
-	gethpath string        "the full path to geth executable. Example: /geth"
-	command  commandObject "the actual command to inject on the bzzd console"
-}
-
-func (self bzzdCommand) Assemble() (commandString string) {
-	//assembles a geth --exec command string from a given bzzdCommand struct.
-	//example: /geth --exec 'bzz.info' attach ipc:/bzzd.ipc
-	commandString = self.gethpath
-	commandString += " --exec '" + self.command.Assemble() + "' attach "
-	commandString += " ipc:" + self.ipc
-	return commandString
-}
-
-//newBzzdCommand is a factory taking a commandObject 'cmd' and producing a corresponding bzzdCommand with the correct defaults for the test cluster.
-func newBzzdCommand(cmd commandObject) *bzzdCommand {
-	return &bzzdCommand{ipc: "/bzzd.ipc", gethpath: "/geth", command: cmd}
+func executeCommand(cmd commandObject) (outstring string) {
+	//given a commandObject, executeCommand assembles it into string and executes on using os.exec
+	var (
+		cmdOut []byte
+		err    error
+	)
+	if cmdOut, err = exec.Command(cmd.Assemble()).Output(); err != nil {
+		fmt.Fprintln(os.Stderr, "There was an error running a shell command: ", err)
+		os.Exit(1)
+	}
+	outstring := string(cmdOut)
 }
 
 //The cluster of swarm nodes is orchestrated by kubernetes.
@@ -96,21 +79,47 @@ func newKubeCommand(conf kubeConfig, cmd commandObject) *kubeCommand {
 }
 
 //canWeAccessKubernetes is a check function to see if kubectl is available and can connect to the cluster
-func canWeAccessKubernetes(conf kubeConfig) {
+func canWeAccessKubernetes(conf kubeConfig) bool {
 	//this function should run 'kubectl version' too see if there are any errors in accessing the cluster
 	//config = newKubeConfig()
-	versionCmd = newKubeCommand(conf, "version")
+	versionCmd = newKubeCommand(conf, "version --short")
 	//and then we must do an os.exec versionCommand.Assemble() and see the return value.
+	versionstring := executeCommand(versionCmd)
+	// should be sth like:
+	// Client Version: v1.5.1
+	// Server Version: v1.4.1
+	if strings.Contains(versionstring, "Client Version") == false || strings.Contains(versionstring, "Server Version") == false {
+		return false
+	}
+	return true
 }
 
 func activateKubernetesProxy(conf kubeConfig) {
 	//test if the proxy is already running. If not start it:
-	startProxy = newKubeCommand(conf, "proxy –api-prefix=/")
-	//then execute the command and check..
+	if canWeAccessKubernetesProxy() == false {
+		startProxy = newKubeCommand(conf, "proxy –api-prefix=/")
+		res := executeCommand(startProxy)
+		if strings.Contains(res, "Starting to serve on 127.0.0.1:8001") == false {
+			//ERROR
+		}
+	}
+	if canWeAccessKubernetesProxy() == false {
+		//ERROR
+	}
+	return
 }
-func canWeAccessKubernetesProxy() {
+
+//canWeAccessKubernetesProxy is a check function to see if we can access the local kubernetes API proxy
+func canWeAccessKubernetesProxy() bool {
 	//this function should query the proxy 'kubectl version' too see if there are any errors in accessing the cluster
 	//we must try to load http://127.0.0.1:8001/api/
+	url := "/api/"
+	var api map[string]interface{}
+	getFromKubeApi(url, &api)
+	if api[kind] != "APIVersions" {
+		return false
+	}
+	return true
 }
 
 //Kubernetes orchestrates 'pods' which contain docker containers for swarm.
@@ -133,13 +142,37 @@ func (self podCommand) Assemble() (commandString string) {
 	return commandString
 }
 
+//We want to issue commands to the bzzd console in the various swarm nodes
+//These commands must be injected to the console using geth attached to the swarm IPC.
+
+//bzzdCommands use geth to inject commands into the bzzd console
+type bzzdCommand struct {
+	ipc      string        "the IPC path. Example /bzzd.ipc"
+	gethpath string        "the full path to geth executable. Example: /geth"
+	command  commandObject "the actual command to inject on the bzzd console"
+}
+
+func (self bzzdCommand) Assemble() (commandString string) {
+	//assembles a geth --exec command string from a given bzzdCommand struct.
+	//example: /geth --exec 'bzz.info' attach ipc:/bzzd.ipc
+	commandString = self.gethpath
+	commandString += " --exec '" + self.command.Assemble() + "' attach "
+	commandString += " ipc:" + self.ipc
+	return commandString
+}
+
+//newBzzdCommand is a factory taking a commandObject 'cmd' and producing a corresponding bzzdCommand with default locations for geth binary and bzzd ipc.
+func newBzzdCommand(cmd commandObject) *bzzdCommand {
+	return &bzzdCommand{ipc: "/bzzd.ipc", gethpath: "/geth", command: cmd}
+}
+
 //
 //
 //
 
 func getBzzdPodNames(cluster cluster) (runningPods []string) {
 	//executes the following kubernetes command on the cluster:
-	getPods = newKubeCommand(cluster, "get pods -o custom-columns=NAME:.metadata.name | grep bzzd")
+	//getPods = newKubeCommand(cluster, "get pods -o custom-columns=NAME:.metadata.name | grep bzzd")
 	//then we must execute that command ... possibly wrap it in bash because of the pipe.
 	//if all ok the output is one pod-name per line.
 	//
@@ -147,24 +180,56 @@ func getBzzdPodNames(cluster cluster) (runningPods []string) {
 	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods
 	//or all bzzd pods
 	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods?labelSelector=app%3Dbzzd
-	//or a specific pod
-	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods?labelSelector=appn%3Dbzzd-30400
+
+	url := "/api/v1/namespaces/swarm/pods?labelSelector=app%3Dbzzd"
+	pods := Pods{}
+	getFromKubeApi(url, &pods)
+	var runningPods []string
+	//todo, fill runningPods with content of
+	//pods[Items][Metadata][Name]
+	//and return it.
+
 }
 
 func getBzzdPodName(cluster cluster, id int) (podName string) {
 	//executes the following kubernetes command on the cluster:
-	getPod = newKubeCommand(cluster, "get pods -o custom-columns=NAME:.metadata.name | grep bzzd-"+id)
+	//getPod = newKubeCommand(cluster, "get pods -o custom-columns=NAME:.metadata.name | grep bzzd-"+id)
 	//then we must execute that command ... possibly wrap it in bash because of the pipe.
 	//if all ok the output is one pod-name of the form bzzd-30399-3196715608-ub01i
 	//we read and parse the output and if all ok, return the name
-	return podName
+	//return podName
+	//
 	//UPDATE: using the kubectl proxy we can get pod names (from JSON object) from
 	//http://127.0.0.1:8001/api/v1/namespaces/swarm/pods?labelSelector=appn%3Dbzzd-30400
+
+	url := "/api/v1/namespaces/swarm/pods?labelSelector=appn%3Dbzzd-" + id
+	pods := Pods{}
+	getFromKubeApi(url, &pods)
+	//todo: there should be only one pod with that tag (eg appn-30399). However there can always be the situation when there appear to be two - for example when one is 'terminating' and the other is 'starting up'.
+	//We should check that we return only (the right) one.
+	return pods[Items][Metadata][Name]
+}
+
+func getFromKubeApi(url string, result *interface{}) {
+	//retrieves 'url' from kubernetes api proxy and unmarshals the retruned JSON into 'result'
+	responseReader, err := http.Get("http://127.0.0.1:8001" + url)
+	if err != nil {
+		// handle error
+	}
+	defer responseReader.Body.Close()
+	response, err1 := ioutil.ReadAll(responseReader.Body)
+	if err1 != nil {
+		// handle error
+	}
+	err2 := json.Unmarshal(podlist, &result)
+	if err2 != nil {
+		// handle error
+	}
 }
 
 func getBzzdConfig(cluster cluster, id int) (bzzdConfig string) {
 	//pulls the current configuration of a bzzd deployment from the cluster.
-	//The otuput is actually JSON so we should parse it and ...
+	//The output is actually JSON so we should parse it and ...
 	cmd = "get deployment bzzd-" + id + " -o json"
 	getDeploymentJson = newKubeCommand(cluster, cmd)
 	//then execute getDeploymentJson and parse the returned string
@@ -182,4 +247,108 @@ func stopBzzd(cluster cluster, id int) {
 	//to stop a bzzd instance, delete the controlling deployment
 	stopBzzd = newKubeCommand(cluster, "delete deployment bzzd-"+id)
 	//then execute the command
+}
+
+// When we get JSON from Kubernets API we want to parse it easily. Best way is to have structs at hand to receive the data.
+//here are some such structs
+
+//Pods are returned from http://127.0.0.1:8001/api/v1/namespaces/swarm/pods
+type Pods struct {
+	// ApiVersion string `json:"apiVersion"`
+	Items []struct {
+		Metadata struct {
+			// Annotations struct {
+			// 	KubernetesIoCreatedBy string `json:"kubernetes.io/created-by"`
+			// } `json:"annotations"`
+			// CreationTimestamp time.Time `json:"creationTimestamp"`
+			// GenerateName      string    `json:"generateName"`
+			// Labels            struct {
+			// 	App             string `json:"app"`
+			// 	Appn            string `json:"appn"`
+			// 	PodTemplateHash int64  `json:"pod-template-hash,string"`
+			// } `json:"labels"`
+			Name string `json:"name"`
+			// 		Namespace       string `json:"namespace"`
+			// 		OwnerReferences []struct {
+			// 			ApiVersion string `json:"apiVersion"`
+			// 			Controller bool   `json:"controller"`
+			// 			Kind       string `json:"kind"`
+			// 			Name       string `json:"name"`
+			// 			Uid        string `json:"uid"`
+			// 		} `json:"ownerReferences"`
+			// 		ResourceVersion int64  `json:"resourceVersion,string"`
+			// 		SelfLink        string `json:"selfLink"`
+			// 		Uid             string `json:"uid"`
+		} `json:"metadata"`
+		// 	Spec struct {
+		// 		Containers []struct {
+		// 			Env []struct {
+		// 				Name  string `json:"name"`
+		// 				Value string `json:"value"`
+		// 			} `json:"env"`
+		// 			Image           string `json:"image"`
+		// 			ImagePullPolicy string `json:"imagePullPolicy"`
+		// 			Name            string `json:"name"`
+		// 			Ports           []struct {
+		// 				ContainerPort int64  `json:"containerPort"`
+		// 				Name          string `json:"name"`
+		// 				Protocol      string `json:"protocol"`
+		// 			} `json:"ports"`
+		// 			Resources struct {
+		// 			} `json:"resources"`
+		// 			TerminationMessagePath string `json:"terminationMessagePath"`
+		// 			VolumeMounts           []struct {
+		// 				MountPath string `json:"mountPath"`
+		// 				Name      string `json:"name"`
+		// 			} `json:"volumeMounts"`
+		// 		} `json:"containers"`
+		// 		DnsPolicy       string `json:"dnsPolicy"`
+		// 		NodeName        string `json:"nodeName"`
+		// 		RestartPolicy   string `json:"restartPolicy"`
+		// 		SecurityContext struct {
+		// 		} `json:"securityContext"`
+		// 		ServiceAccount                string `json:"serviceAccount"`
+		// 		ServiceAccountName            string `json:"serviceAccountName"`
+		// 		TerminationGracePeriodSeconds int64  `json:"terminationGracePeriodSeconds"`
+		// 		Volumes                       []struct {
+		// 			Name string `json:"name"`
+		// 			Nfs  struct {
+		// 				Path   string `json:"path"`
+		// 				Server net.IP `json:"server"`
+		// 			} `json:"nfs"`
+		// 		} `json:"volumes"`
+		// 	} `json:"spec"`
+		// 	Status struct {
+		// 		Conditions []struct {
+		// 			LastProbeTime      interface{} `json:"lastProbeTime"`
+		// 			LastTransitionTime time.Time   `json:"lastTransitionTime"`
+		// 			Status             bool        `json:"status,string"`
+		// 			Type               string      `json:"type"`
+		// 		} `json:"conditions"`
+		// 		ContainerStatuses []struct {
+		// 			ContainerID string `json:"containerID"`
+		// 			Image       string `json:"image"`
+		// 			ImageID     string `json:"imageID"`
+		// 			LastState   struct {
+		// 			} `json:"lastState"`
+		// 			Name         string `json:"name"`
+		// 			Ready        bool   `json:"ready"`
+		// 			RestartCount int64  `json:"restartCount"`
+		// 			State        struct {
+		// 				Running struct {
+		// 					StartedAt time.Time `json:"startedAt"`
+		// 				} `json:"running"`
+		// 			} `json:"state"`
+		// 		} `json:"containerStatuses"`
+		// 		HostIP    net.IP    `json:"hostIP"`
+		// 		Phase     string    `json:"phase"`
+		// 		PodIP     net.IP    `json:"podIP"`
+		// 		StartTime time.Time `json:"startTime"`
+		// 	} `json:"status"`
+	} `json:"items"`
+	// Kind     string `json:"kind"`
+	// 	Metadata struct {
+	// 		ResourceVersion int64  `json:"resourceVersion,string"`
+	// 		SelfLink        string `json:"selfLink"`
+	// } `json:"metadata"`
 }

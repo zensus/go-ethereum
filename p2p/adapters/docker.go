@@ -46,8 +46,6 @@ func (self *RemoteNode) Disconnect(rid []byte) error {
 }
 
 func (self *RemoteNode) Connect(rid []byte) error {
-	// ssh+ipc -> connect
-	//
 	cmd := fmt.Sprintf(`admin.addPeer("%v")`, string(rid))
 	return self.inject(cmd)
 }
