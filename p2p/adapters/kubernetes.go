@@ -170,7 +170,7 @@ func newBzzdCommand(cmd commandObject) *bzzdCommand {
 //
 //
 
-func getBzzdPodNames(cluster cluster) (runningPods []string) {
+func getBzzdPodNames(cluster cluster) (runningPods map[int]string) {
 	//executes the following kubernetes command on the cluster:
 	//getPods = newKubeCommand(cluster, "get pods -o custom-columns=NAME:.metadata.name | grep bzzd")
 	//then we must execute that command ... possibly wrap it in bash because of the pipe.
@@ -188,6 +188,7 @@ func getBzzdPodNames(cluster cluster) (runningPods []string) {
 	//todo, fill runningPods with content of
 	//pods[Items][Metadata][Name]
 	//and return it.
+	// i.e. runningPods[30399] should be the name of the pod serving port 30399
 
 }
 
@@ -251,7 +252,50 @@ func restartBzzd(cluster cluster, id int) {
 func stopBzzd(cluster cluster, id int) {
 	//to stop a bzzd instance, delete the controlling deployment
 	stopBzzd = newKubeCommand(cluster, "delete deployment bzzd-"+id)
-	//then execute the command
+	executeCommand(stopBzzd)
+}
+
+//
+//
+//
+//
+
+var nodeIds = []uint{30399, 30400, 30401, 30402, 30403, 30404, 30405, 30406, 30407, 30408, 30409, 30410, 30411, 30412, 30413, 30414, 30415, 30416, 30417, 30418, 30419, 30420, 30421, 30422, 30423, 30424, 30425, 30426, 30427, 30428, 30429, 30430, 30431, 30432, 30433, 30434}
+
+type kubNode struct {
+	cluster cluster
+	id      uint
+	//port 	uint -- port is equal to id
+	//deployment 	string -- deployment name is bzzd-id
+}
+
+func newKubNode(cluster cluster) *kubNode {
+	if canWeAccessKubernetesProxy() == false {
+		//ERROR - must have access to kubernetes proxy. Run activateKubernetesProxy() first
+	}
+	if canWeAccessKubernetes(cluster) == false {
+		//ERROR - must be able to access cluster with kubectl
+	}
+	runningPods := getBzzdPodNames(cluster)
+	//
+	// loop through nodeIds until you find one such that runningPods[nodeId] does not exist.
+	// that is the id of the new kubeNode
+	return &kubNode{cluster: cluster, id: nodeId}
+}
+
+func (self *kubeNode) Start() (err error) {
+	confPath = "$HOME/go/src/github.com/ethereum/cluster/configs/swarmeastus/bzzd-pods/pzzd-" + self.id + ".yaml"
+	startNode := newKubeCommand(cluster, commandString("create -f "+confPath))
+	executeCommand(startNode)
+	//TODO error handling.
+	return nil
+}
+
+func (self *kubeNode) Stop() (err error) {
+	stopNode := newKubeCommand(cluster, commandString("delete deployment bzzd-"+self.id))
+	executeCommand(stopNode)
+	//TODO error handling
+	return nil
 }
 
 // When we get JSON from Kubernets API we want to parse it easily. Best way is to have structs at hand to receive the data.
