@@ -71,6 +71,18 @@ func (h Key) bits(i, j uint) uint {
 	return res
 }
 
+func proximity(one, other []byte) (ret int) {
+	for i := 0; i < len(one); i++ {
+		oxo := one[i] ^ other[i]
+		for j := 0; j < 8; j++ {
+			if (uint8(oxo)>>uint8(7-j))&0x01 != 0 {
+				return i*8 + j
+			}
+		}
+	}
+	return len(one) * 8
+}
+
 func IsZeroKey(key Key) bool {
 	return len(key) == 0 || bytes.Equal(key, ZeroKey)
 }
