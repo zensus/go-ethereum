@@ -416,20 +416,14 @@ func (self *bzz) sync(state *syncState) error {
 
 	cnt := self.dbAccess.counter()
 	remoteaddr := self.remoteAddr.Addr
-	start, stop := self.hive.kad.KeyRange(remoteaddr)
 
 	// an explicitly received nil syncstate disables syncronisation
 	if state == nil {
 		self.syncEnabled = false
 		glog.V(logger.Warn).Infof("syncronisation disabled for peer %v", self)
-		state = &syncState{DbSyncState: &storage.DbSyncState{}, Synced: true}
+		state = &syncState{Synced: true}
 	} else {
-		state.synced = make(chan bool)
 		state.SessionAt = cnt
-		if storage.IsZeroKey(state.Stop) && state.Synced {
-			state.Start = storage.Key(start[:])
-			state.Stop = storage.Key(stop[:])
-		}
 		glog.V(logger.Debug).Infof("syncronisation requested by peer %v at state %v", self, state)
 	}
 	var err error

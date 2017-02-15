@@ -71,8 +71,8 @@ type DbStore struct {
 	gcArray           []*gcItem
 
 	hashfunc Hasher
-
-	lock sync.Mutex
+	po       func(Key) uint8
+	lock     sync.Mutex
 }
 
 func NewDbStore(path string, hash Hasher, capacity uint64, po func(Key) uint8) (*DbStore, error) {
@@ -87,6 +87,7 @@ func NewDbStore(path string, hash Hasher, capacity uint64, po func(Key) uint8) (
 		db:       db,
 	}
 
+	s.po = po
 	s.setCapacity(capacity)
 
 	s.gcStartPos = make([]byte, 1)
@@ -333,7 +334,6 @@ func (s *DbStore) ReIndex() {
 		hasher := s.hashfunc()
 		hasher.Write(data)
 		hash := hasher.Sum(nil)
-		newData := append(data, hash...)
 
 		newKey := make([]byte, 10)
 		key[0] = keyData
@@ -452,6 +452,7 @@ func (s *DbStore) Get(key Key) (chunk *Chunk, err error) {
 		hasher.Write(data)
 		hash := hasher.Sum(nil)
 		if !bytes.Equal(hash, key) {
+			glog.V(logger.Error).Infof("Apparent key/hash mismatch. Hash %x, key %v", hash, key[:])
 			s.delete(index.Idx, getIndexKey(key), s.po(key))
 			panic("Invalid Chunk in Database. Please repair with command: 'swarm cleandb'")
 		}
@@ -466,11 +467,6 @@ func (s *DbStore) Get(key Key) (chunk *Chunk, err error) {
 
 	return
 
-}
-
-// TODO:
-func (s *DbStore) po(key Key) uint8 {
-	return 0
 }
 
 func (s *DbStore) updateAccessCnt(key Key) {
@@ -526,7 +522,7 @@ type DbSyncState struct {
 }
 
 // initialises a sync iterator from a syncToken (passed in with the handshake)
-func (s *DbStore) NewSyncIterator(since uint64, po uint8, f func(key Key) bool) error {
+func (s *DbStore) SyncIterator(since uint64, po uint8, f func(key Key, idx uint64) bool) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	it := s.db.NewIterator()
@@ -537,7 +533,7 @@ func (s *DbStore) NewSyncIterator(since uint64, po uint8, f func(key Key) bool) 
 			break
 		}
 		it.Next()
-		if !f(Key(it.Value()[:32])) {
+		if !f(Key(it.Value()[:32]), binary.BigEndian.Uint64(dbkey[2:])) {
 			break
 		}
 	}

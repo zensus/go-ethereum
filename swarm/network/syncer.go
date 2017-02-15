@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
@@ -99,13 +100,13 @@ func (self *DbAccess) counter() uint64 {
 }
 
 // iteration storage counter and proximity order
-func (self *DbAccess) iterator(since uint64, po uint8, f func(storage.Key) bool) error {
+func (self *DbAccess) iterator(since uint64, po uint8, f func(storage.Key, uint64) bool) error {
 	return self.db.SyncIterator(since, po, f)
 }
 
 func (self syncState) String() string {
 	return fmt.Sprintf("synced: %v, session started at: %v, requested sync since: %v, latest key: %v",
-		self.synced, self.SessionAt, self.Since, self.Last)
+		self.SessionAt, self.Since, self.Last)
 }
 
 // syncer parameters (global, not peer specific)
@@ -273,7 +274,7 @@ func (self *syncer) sync() {
 	if !state.Synced {
 
 		if state.Since < state.SessionAt {
-			glog.V(logger.Debug).Infof("syncer[%v]: start syncronising history since last disconnect at %v up until session start at %v: %v", self.key.Log(), state.LastSeenAt, state.SessionAt, state)
+			glog.V(logger.Debug).Infof("syncer[%v]: start synchronising history since last disconnect at %v up until session start at %v: %v", self.key.Log(), state.Last, state.SessionAt, state)
 			// blocks until state syncing is finished
 			self.syncStates <- state
 		}
@@ -320,29 +321,31 @@ func (self *syncer) syncHistory(state *syncState) chan interface{} {
 	var roundCnt, stateCnt, totalCnt uint
 	var quit, wait bool
 	var newstate *syncState
-statesC = self.syncStates
+	statesC := self.syncStates
 	history := make(chan interface{}, historyBufferSize)
 	go func() {
 		// signal end of the iteration ended
 		defer close(history)
 		for {
 			glog.V(logger.Debug).Infof("syncer[%v]: syncing history since %v for chunks of proximity order %v", self.key.Log(), state.Since, state.PO)
-			err := self.dbAccess.iterator(state.Since, state.PO, func(key storage.Key) bool {
+			err := self.dbAccess.iterator(state.Since, state.PO, func(key storage.Key, idx uint64) bool {
 				select {
 				// blocking until history channel is read from
 				case history <- key:
 					roundCnt++
 					stateCnt++
 					totalCnt++
-					glog.V(logger.Detail).Infof("syncer[%v]: history: %v (%v keys)", self.key.Log(), key.Log(), n)
-					state.Last = key
+					glog.V(logger.Detail).Infof("syncer[%v]: history: %v (%v keys)", self.key.Log(), key.Log(), roundCnt)
+					state.Last = idx
 					return true
 				case newstate = <-statesC:
 					if newstate.Abort {
-for _=range history {}
-					return false
+						for range history {
+						}
+						return false
 					}
-						statesC = nil
+					return true
+					statesC = nil
 				case <-self.quit:
 					quit = true
 					return false
@@ -350,6 +353,7 @@ for _=range history {}
 					wait = true
 					return false
 				}
+				return true //dummy return.
 			})
 			if err != nil {
 				glog.V(logger.Debug).Infof("syncer[%v]: sync for %v failed: %v: ..abort syncing", self.key.Log(), state, err)
@@ -359,33 +363,35 @@ for _=range history {}
 			if quit {
 				return
 			}
-			for  len(history)  > historyBufferSize/5 {
-				t := time.NewTimer(100*time.MilliSecond)
-select {
+			for len(history) > historyBufferSize/5 {
+				t := time.NewTimer(100 * time.Millisecond)
+				select {
 				case newstate = <-statesC:
-							if newstate != nil && newstate.Abort {
-for _=range history {}
-continue
-}
-						statesC = nil
-case <- t.C:
-}
-}
-statesC = self.syncStates
+					if newstate != nil && newstate.Abort {
+						for range history {
+						}
+						continue
+					}
+					statesC = nil
+				case <-t.C:
+				}
+			}
+			if newstate != nil {
+				statesC = self.syncStates
 				state = newstate
 				newstate = nil
 				stateCnt = 0
-			} else if more {
-				state.Since = since.Last
-				more = false
+			} else {
+				state.Since = state.Last
 			}
-			roundCnt = 0
 		}
+		wait = false
+		roundCnt = 0
 	}()
 	return history
 }
 
-// triggers key syncronisation
+// triggers key synchronisation
 func (self *syncer) sendUnsyncedKeys() {
 	select {
 	case self.deliveryRequest <- true:
@@ -411,7 +417,6 @@ func (self *syncer) syncUnsyncedKeys() {
 	var newUnsyncedKeys, deliveryRequest chan bool
 	keyCounts := make([]int, priorities)
 	histPrior := self.SyncPriorities[HistoryReq]
-	syncStates := self.syncStates
 	state := self.state
 
 LOOP:
@@ -465,8 +470,7 @@ LOOP:
 			newUnsyncedKeys = nil // not care about data until next req comes in
 			// set sync to current counter
 			// (all nonhistorical outgoing traffic sheduled and persisted
-			state.LastSeenAt = self.dbAccess.counter()
-			state.Latest = storage.ZeroKey
+			state.Last = self.dbAccess.counter()
 			glog.V(logger.Detail).Infof("syncer[%v]: sending %v", self.key.Log(), unsynced)
 			//  send the unsynced keys
 			stateCopy := *state
@@ -488,13 +492,7 @@ LOOP:
 			if keys == history && !more {
 				glog.V(logger.Detail).Infof("syncer[%v]: syncing history segment complete", self.key.Log())
 				// history channel is closed, waiting for new state (called from sync())
-				syncStates = self.syncStates
 				state.Synced = true // this signals that the  current segment is complete
-				select {
-				case state.synced <- false:
-				case <-self.quit:
-					break LOOP
-				}
 				justSynced = true
 				history = nil
 			}
