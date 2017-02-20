@@ -20,6 +20,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -35,16 +36,42 @@ import (
 	"gopkg.in/urfave/cli.v1"
 )
 
-func upload(ctx *cli.Context) {
+func upload(ctx *cli.Context) (err error) {
+
 	args := ctx.Args()
+
 	var (
-		bzzapi       = strings.TrimRight(ctx.GlobalString(SwarmApiFlag.Name), "/")
-		recursive    = ctx.GlobalBool(SwarmRecursiveUploadFlag.Name)
 		wantManifest = ctx.GlobalBoolT(SwarmWantManifestFlag.Name)
-		defaultPath  = ctx.GlobalString(SwarmUploadDefaultPath.Name)
 	)
-	if len(args) != 1 {
-		log.Fatal("need filename as the first and only argument")
+
+	var bzzapi string
+	if ctx.IsSet("bzzapi") {
+		bzzapi = strings.TrimRight(ctx.String("bzzapi"), "/")
+	} else if ctx.GlobalIsSet(SwarmApiFlag.Name) {
+		bzzapi = strings.TrimRight(ctx.GlobalString(SwarmApiFlag.Name), "/")
+	}
+
+	var recursive bool
+	if ctx.IsSet("recursive") {
+		recursive = ctx.Bool("recursive")
+	} else if ctx.GlobalIsSet("recursive") {
+		recursive = ctx.GlobalBool(SwarmRecursiveUploadFlag.Name)
+	}
+
+	var defaultPath string
+	if ctx.IsSet("defaultPath") {
+		defaultPath = ctx.String("defaultPath")
+	} else if ctx.GlobalIsSet("defaultPath") {
+		defaultPath = ctx.GlobalString(SwarmUploadDefaultPath.Name)
+	}
+
+	if l := len(args); l != 1 {
+		if l == 0 {
+			return errors.New("Swarm upload: missing filename argument")
+		}
+		if l > 1 {
+			return errors.New("Swarm upload: too many arguments")
+		}
 	}
 
 	var (
@@ -57,17 +84,17 @@ func upload(ctx *cli.Context) {
 	}
 	if fi.IsDir() {
 		if !recursive {
-			log.Fatal("argument is a directory and recursive upload is disabled")
+			return errors.New("argument is a directory. To upload a directory use --recursive")
 		}
 		if !wantManifest {
-			log.Fatal("manifest is required for directory uploads")
+			return errors.New("manifest is required for directory uploads")
 		}
 		mhash, err := client.uploadDirectory(file, defaultPath)
 		if err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println(mhash)
-		return
+		return err
 	}
 	entry, err := client.uploadFile(file, fi)
 	if err != nil {
@@ -78,13 +105,14 @@ func upload(ctx *cli.Context) {
 		// Print the manifest. This is the only output to stdout.
 		mrootJSON, _ := json.MarshalIndent(mroot, "", "  ")
 		fmt.Println(string(mrootJSON))
-		return
+		return nil
 	}
 	hash, err := client.uploadManifest(mroot)
 	if err != nil {
 		log.Fatalln("manifest upload failed:", err)
 	}
 	fmt.Println(hash)
+	return nil
 }
 
 // Expands a file path
@@ -129,6 +157,11 @@ type manifest struct {
 }
 
 func (c *client) uploadDirectory(dir string, defaultPath string) (string, error) {
+	if defaultPath == "" {
+		fmt.Println("--defaultpath not specified. Uploading directory", dir, "and generating manifest without a default entry.")
+	} else {
+		fmt.Println("Uploading directory", dir, "and generating manifest with default:", defaultPath)
+	}
 	mhash, err := c.postRaw("application/json", 2, ioutil.NopCloser(bytes.NewReader([]byte("{}"))))
 	if err != nil {
 		return "", fmt.Errorf("failed to upload empty manifest")
@@ -233,7 +266,7 @@ func (c *client) postRaw(mimetype string, size int64, body io.ReadCloser) (strin
 func (c *client) downloadManifest(mhash string) (manifest, error) {
 
 	mroot := manifest{}
-	req, err := http.NewRequest("GET", c.api + "/bzzr:/" + mhash, nil)
+	req, err := http.NewRequest("GET", c.api+"/bzzr:/"+mhash, nil)
 	if err != nil {
 		return mroot, err
 	}
@@ -254,4 +287,8 @@ func (c *client) downloadManifest(mhash string) (manifest, error) {
 		return mroot, fmt.Errorf("Manifest %v is malformed: %v", mhash, err)
 	}
 	return mroot, err
+}
+
+func uphelp(ctx *cli.Context) {
+
 }

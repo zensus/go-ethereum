@@ -69,11 +69,11 @@ var (
 	}
 	SwarmAccountFlag = cli.StringFlag{
 		Name:  "bzzaccount",
-		Usage: "Swarm account key file",
+		Usage: "`ADDRESS` to use as Swarm account",
 	}
 	SwarmPortFlag = cli.StringFlag{
 		Name:  "bzzport",
-		Usage: "Swarm local http api port",
+		Usage: "Set Swarm local http api port to `PORT`",
 	}
 	SwarmNetworkIdFlag = cli.IntFlag{
 		Name:  "bzznetworkid",
@@ -93,16 +93,16 @@ var (
 	}
 	EthAPIFlag = cli.StringFlag{
 		Name:  "ethapi",
-		Usage: "URL of the Ethereum API provider",
+		Usage: "Set the Ethereum API provider as `URL` for use in ENS and payments",
 		Value: node.DefaultIPCEndpoint("geth"),
 	}
 	SwarmApiFlag = cli.StringFlag{
 		Name:  "bzzapi",
-		Usage: "Swarm HTTP endpoint",
+		Usage: "Use `URL` as swarm HTTP endpoint",
 		Value: "http://127.0.0.1:8500",
 	}
 	SwarmRecursiveUploadFlag = cli.BoolFlag{
-		Name:  "recursive",
+		Name:  "recursive, R",
 		Usage: "Upload directories recursively",
 	}
 	SwarmWantManifestFlag = cli.BoolTFlag{
@@ -110,8 +110,8 @@ var (
 		Usage: "Automatic manifest upload",
 	}
 	SwarmUploadDefaultPath = cli.StringFlag{
-		Name:  "defaultpath",
-		Usage: "path to file served for empty url path (none)",
+		Name:  "defaultpath, index",
+		Usage: "On directory upload set default entry to `FILE`",
 	}
 	CorsStringFlag = cli.StringFlag{
 		Name:  "corsdomain",
@@ -125,119 +125,175 @@ func init() {
 	utils.IPCPathFlag.Value = utils.DirectoryString{Value: "bzzd.ipc"}
 	utils.IPCApiFlag.Value = "admin, bzz, chequebook, debug, rpc, web3"
 
-	// Set up the cli app.
-	app.Action = bzzd
-	app.HideVersion = true // we have a command to print the version
-	app.Copyright = "Copyright 2013-2016 The go-ethereum Authors"
-	app.Commands = []cli.Command{
-		{
-			Action:    version,
-			Name:      "version",
-			Usage:     "Print version numbers",
-			ArgsUsage: " ",
-			Description: `
-The output of this command is supposed to be machine-readable.
-`,
-		},
-		{
-			Action:    upload,
-			Name:      "up",
-			Usage:     "upload a file or directory to swarm using the HTTP API",
-			ArgsUsage: " <file>",
-			Description: `
-"upload a file or directory to swarm using the HTTP API and prints the root hash",
-`,
-		},
-		{
-			Action:    hash,
-			Name:      "hash",
-			Usage:     "print the swarm hash of a file or directory",
-			ArgsUsage: " <file>",
-			Description: `
-Prints the swarm hash of file or directory.
-`,
-		},
-		{
-			Name:      "manifest",
-			Usage:     "update a MANIFEST",
-			ArgsUsage: "manifest COMMAND",
-			Description: `
-Updates a MANIFEST by adding/removing/updating the hash of a path.
-`,
-			Subcommands: []cli.Command{
-				{
-					Action:    add,
-					Name:      "add",
-					Usage:     "add a new path to the manifest",
-					ArgsUsage: "<MANIFEST> <path> <hash> [<content-type>]",
-					Description: `
-Adds a new path to the manifest
-`,
-				},
-				{
-					Action:    update,
-					Name:      "update",
-					Usage:     "update the hash for an already existing path in the manifest",
-					ArgsUsage: "<MANIFEST> <path> <newhash> [<newcontent-type>]",
-					Description: `
-Update the hash for an already existing path in the manifest
-`,
-				},
-				{
-					Action:    remove,
-					Name:      "remove",
-					Usage:     "removes a path from the manifest",
-					ArgsUsage: "<MANIFEST> <path>",
-					Description: `
-Removes a path from the manifest
-`,
-				},
-			},
-		},
-		{
-			Action:    cleandb,
-			Name:      "cleandb",
-			Usage:     "Cleans database of corrupted entries",
-			ArgsUsage: " ",
-			Description: `
-Cleans database of corrupted entries.
-`,
-		},
-	}
-
-	app.Flags = []cli.Flag{
-		utils.IdentityFlag,
+	//command specific flags
+	var bzzFlags = []cli.Flag{
 		utils.DataDirFlag,
-		utils.BootnodesFlag,
-		utils.KeyStoreDirFlag,
+		SwarmAccountFlag,
+		EthAPIFlag,
+		SwarmNetworkIdFlag,
+		ChequebookAddrFlag,
+		utils.MaxPeersFlag,
+		CorsStringFlag,
+		SwarmConfigPathFlag,
+		SwarmSwapEnabledFlag,
+		SwarmSyncEnabledFlag,
+		SwarmPortFlag,
 		utils.ListenPortFlag,
+		utils.IPCPathFlag,
 		utils.NoDiscoverFlag,
 		utils.DiscoveryV5Flag,
 		utils.NetrestrictFlag,
 		utils.NodeKeyFileFlag,
 		utils.NodeKeyHexFlag,
-		utils.MaxPeersFlag,
 		utils.NATFlag,
 		utils.IPCDisabledFlag,
 		utils.IPCApiFlag,
-		utils.IPCPathFlag,
-		// bzzd-specific flags
-		CorsStringFlag,
-		EthAPIFlag,
-		SwarmConfigPathFlag,
-		SwarmSwapEnabledFlag,
-		SwarmSyncEnabledFlag,
-		SwarmPortFlag,
-		SwarmAccountFlag,
-		SwarmNetworkIdFlag,
-		ChequebookAddrFlag,
-		// upload flags
+		utils.IdentityFlag,
+		utils.BootnodesFlag,
+		utils.KeyStoreDirFlag,
+	}
+
+	var uploadFlags = []cli.Flag{
 		SwarmApiFlag,
 		SwarmRecursiveUploadFlag,
 		SwarmWantManifestFlag,
 		SwarmUploadDefaultPath,
 	}
+
+	//Main command - start bzzd
+	var bzzCommand = cli.Command{
+		Action: bzzd,
+		Name:   "start",
+		Usage:  "Start a local swarm node",
+		Description: `
+Join the swarm and start a local swarm gateway.
+Example:
+	swarm start --bzzaccount XXX 
+`,
+		Flags: bzzFlags,
+	}
+
+	//version command: print version information
+	var versionCommand = cli.Command{
+		Action:    version,
+		Name:      "version",
+		Usage:     "Print version numbers",
+		ArgsUsage: " ",
+		Description: `
+		}
+The output of this command is supposed to be machine-readable.
+`,
+	}
+
+	//hash command: calculate and display a swarm hash
+	var hashCommand = cli.Command{
+		Action:    hash,
+		Name:      "hash",
+		Usage:     "print the swarm hash of a file or directory",
+		ArgsUsage: " <file>",
+		Description: `
+Prints the swarm hash of file or directory.
+`,
+	}
+
+	//cleandb command: scan the chunkdb for errors and fix them
+	var cleanDbCommand = cli.Command{
+		Action:    cleandb,
+		Name:      "cleandb",
+		Usage:     "Cleans database of corrupted entries",
+		ArgsUsage: " ",
+		Description: `
+Cleans database of corrupted entries.
+Example:
+	swarm cleandb /path/to/datadir/swarm/bzz-KEY/chunks/
+`,
+	}
+
+	//upload command: upload data to swarm node via http
+	var uploadCommand = cli.Command{
+		Action:    upload,
+		Name:      "upload",
+		Aliases:   []string{"up"},
+		Category:  "upload",
+		Usage:     "upload a file or directory to a swarm node using the HTTP API",
+		ArgsUsage: " <file>",
+		Description: `
+Uploads a file or directory to swarm using the HTTP API and returns a Manifest hash.
+Default behaviour uploads to local swarm node. Upload to remote node is possible using --bzzapi http://remote.swarm.node.tld/
+Example:
+     swarm up --recursive --defaultPath "/path/to/dir/index.html" /path/to/dir/
+`,
+		Flags: uploadFlags,
+	}
+
+	//manifest command: manifest manipulation tool
+	var manifestAddCommand = cli.Command{
+		Action:    add,
+		Name:      "add",
+		Usage:     "add a new path to the manifest",
+		ArgsUsage: "<MANIFEST> <path> <hash> [<content-type>]",
+		Description: `
+Adds a new path to the manifest
+`,
+	}
+	var manifestUpdateCommand = cli.Command{
+		Action:    update,
+		Name:      "update",
+		Usage:     "update the hash for an already existing path in the manifest",
+		ArgsUsage: "<MANIFEST> <path> <newhash> [<newcontent-type>]",
+		Description: `
+Update the hash for an already existing path in the manifest
+`,
+	}
+
+	var manifestRemoveCommand = cli.Command{
+		Action:    remove,
+		Name:      "remove",
+		Usage:     "removes a path from the manifest",
+		ArgsUsage: "<MANIFEST> <path>",
+		Description: `
+Removes a path from the manifest
+`,
+	}
+
+	var manifestSubCommands = []cli.Command{
+		manifestAddCommand,
+		manifestUpdateCommand,
+		manifestRemoveCommand,
+	}
+
+	var manifestCommand = cli.Command{
+		Name:      "manifest",
+		Usage:     "modify/update a manifest",
+		Category:  "upload",
+		ArgsUsage: "manifest COMMAND",
+		Description: `
+Updates a MANIFEST by adding/removing/updating the hash of a path.
+`,
+		Subcommands: manifestSubCommands,
+		Flags: []cli.Flag{
+			SwarmApiFlag,
+		},
+	}
+
+	// Set up the cli app.
+	app.Action = cli.ShowAppHelp
+	app.HideVersion = true // we have a command to print the version
+	app.Copyright = "Copyright 2013-2017 The go-ethereum Authors"
+	app.Commands = []cli.Command{
+		bzzCommand,
+		versionCommand,
+		uploadCommand,
+		hashCommand,
+		manifestCommand,
+		cleanDbCommand,
+	}
+
+	app.Flags = []cli.Flag{
+	//app flags
+	}
 	app.Flags = append(app.Flags, debug.Flags...)
+
 	app.Before = func(ctx *cli.Context) error {
 		runtime.GOMAXPROCS(runtime.NumCPU())
 		return debug.Setup(ctx)
