@@ -50,6 +50,7 @@ type Overlay interface {
 	SuggestPeer() (PeerAddr, int, bool)
 
 	String() string
+	GetAddr() PeerAddr
 }
 
 // Hive implements the PeerPool interface
@@ -123,7 +124,7 @@ func (self *Hive) Start(connectPeer func(string) error, af func() <-chan time.Ti
 
 			want = want && self.Discovery
 			if want {
-				RequestOrder(self.Overlay, uint8(order), self.PeersBroadcastSetSize, self.MaxPeersPerRequest)
+				go RequestOrder(self.Overlay, uint8(order), self.PeersBroadcastSetSize, self.MaxPeersPerRequest)
 			}
 
 			select {
