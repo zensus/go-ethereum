@@ -53,7 +53,9 @@ func (self *discPeer) NotifyPeer(p Peer, po uint8) error {
 	resp := &peersMsg{
 		Peers: []*peerAddr{&peerAddr{OAddr: p.OverlayAddr(), UAddr: p.UnderlayAddr()}}, // perhaps the PeerAddr interface is unnecessary generalization
 	}
-	return self.Send(resp)
+	self.Send(resp)
+	//return err
+	return nil
 }
 
 // NotifyProx sends a subPeers Msg to the receiver notifying them about
@@ -61,7 +63,9 @@ func (self *discPeer) NotifyPeer(p Peer, po uint8) error {
 // or first empty row)
 // callback for overlay driver
 func (self *discPeer) NotifyProx(po uint8) error {
-	return self.Send(&subPeersMsg{ProxLimit: po})
+	self.Send(&subPeersMsg{ProxLimit: po})
+	//return err
+	return nil
 }
 
 /*
@@ -177,7 +181,8 @@ func (self *discPeer) handleGetPeersMsg(msg interface{}) error {
 	resp := &peersMsg{
 		Peers: peers,
 	}
-	return self.Send(resp)
+	self.Send(resp)
+	return nil 
 }
 
 func RequestOrder(k Overlay, order, broadcastSize, maxPeers uint8) {
@@ -186,10 +191,10 @@ func RequestOrder(k Overlay, order, broadcastSize, maxPeers uint8) {
 		Max:   maxPeers,
 	}
 	var i uint8
-	var err error
+	//var err error
 	k.EachLivePeer(nil, 255, func(n Peer, po int) bool {
 		log.Trace(fmt.Sprintf("%T sent to %v", req, n.ID()))
-		err = n.Send(req)
+		err := n.Send(req)
 		if err == nil {
 			i++
 			if i >= broadcastSize {
