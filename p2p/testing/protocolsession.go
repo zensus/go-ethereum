@@ -110,8 +110,39 @@ func (self *ProtocolSession) expect(exp Expect) error {
 
 	errc := make(chan error)
 	go func() {
-		log.Trace(fmt.Sprintf("waiting for msg, %v", exp.Msg))
-		errc <- p2p.ExpectMsg(peer, exp.Code, exp.Msg)
+		var err error
+		ignored := true
+		glog.V(logger.Detail).Infof("waiting for msg #%d, %v", exp.Code, exp.Msg)
+		for ignored {
+			ignored = false
+			err = p2p.ExpectMsg(peer, exp.Code, exp.Msg)
+			// frail, but we can't know what code expectmsg got otherwise
+			// can we do better error reporting in p2p.ExpectMsg()?
+			if err != nil {
+				if strings.Contains(err.Error(), "code") {
+					re, _ := regexp.Compile("got ([0-9]+),")
+					match := re.FindStringSubmatch(err.Error())
+					if len(match) > 1 {
+						for _, codetoignore := range self.ignore {
+							codewegot, err := strconv.ParseUint(match[1], 10, 64)
+							if err == nil {
+								if codetoignore == codewegot {
+									ignored = true
+									glog.V(logger.Detail).Infof("ignore msg #%d (expecting #%d)", codewegot, exp.Code)
+									break
+								}
+							} else {
+								glog.V(logger.Warn).Infof("expectmsg errormsg parse error?!")
+							}
+						} 
+					} else {
+						glog.V(logger.Warn).Infof("expectmsg errormsg parse error?!")
+						break
+					}
+				}
+			}
+		}
+		errc <- err
 	}()
 
 	t := exp.Timeout

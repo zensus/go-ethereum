@@ -28,6 +28,13 @@ func (self *testOverlay) Register(nas ...PeerAddr) error {
 	return self.register(nas...)
 }
 
+func (self *testOverlay) GetAddr() PeerAddr {
+	return &peerAddr{
+		OAddr: self.addr,
+		UAddr: []byte{},
+	}
+}
+
 func (self *testOverlay) register(nas ...PeerAddr) error {
 	for _, na := range nas {
 		tna := &testPeerAddr{PeerAddr: na}

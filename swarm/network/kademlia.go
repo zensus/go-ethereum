@@ -196,7 +196,13 @@ func NewKadPeer(na PeerAddr) *KadPeer {
 	}
 }
 
-// Register enters each PeerAddr as kademlia peers into the
+// retrieve the base address
+// which is the overlayaddress used by peers to reach us
+func (self *Kademlia) GetAddr() PeerAddr {
+	return self.addr
+}
+
+// Register(nas) enters each PeerAddr as kademlia peers into the
 // database of known peers
 func (self *Kademlia) Register(nas ...PeerAddr) error {
 	label := fmt.Sprintf("%x", RandomAddr().OverlayAddr())
