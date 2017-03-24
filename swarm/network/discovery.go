@@ -10,14 +10,13 @@ import (
 )
 
 // discovery bzz overlay extension doing peer relaying
-// can be switched off
 
 type discPeer struct {
 	Peer
-	overlay   		Overlay
-	proxLimit 		uint8
-	peers     		map[discover.NodeID]bool
-	sentPeers	    bool
+	overlay   Overlay
+	proxLimit uint8
+	peers     map[discover.NodeID]bool
+	sentPeers bool
 }
 
 // NotifyPeer notifies the receiver remote end of a peer p or PO po.
@@ -26,6 +25,8 @@ func (self *discPeer) NotifyPeer(p Peer, po uint8) error {
 	if po < self.proxLimit || self.peers[p.ID()] || !self.sentPeers {
 		return nil
 	}
+	glog.V(logger.Warn).Infof("notification about %x", p.OverlayAddr())
+
 	resp := &peersMsg{
 		//Peers: []*peerAddr{p.(*discPeer).Peer.(*bzzPeer).peerAddr},
 		Peers: []*peerAddr{&peerAddr{OAddr: p.OverlayAddr(), UAddr: p.UnderlayAddr()}}, // perhaps the PeerAddr interface is unnecessary generalization
@@ -97,7 +98,7 @@ func (self getPeersMsg) String() string {
 // subPeers msg is communicating the depth/sharpness/focus  of the overlay table of a peer
 type SubPeersMsg struct {
 	//MinProxBinSize uint8
-	ProxLimit      uint8
+	ProxLimit uint8
 }
 
 func (self SubPeersMsg) String() string {
@@ -106,20 +107,23 @@ func (self SubPeersMsg) String() string {
 
 func (self *discPeer) handleSubPeersMsg(msg interface{}) error {
 	spm := msg.(*SubPeersMsg)
+	self.proxLimit = spm.ProxLimit
 	if !self.sentPeers {
 		var peers []*peerAddr
 		self.overlay.EachLivePeer(self.OverlayAddr(), 255, func(p Peer, po int) bool {
-			if uint8(po) > self.proxLimit {
+			if uint8(po) < self.proxLimit {
 				return false
 			}
 			self.peers[p.ID()] = true
 			peers = append(peers, &peerAddr{p.OverlayAddr(), p.UnderlayAddr()})
 			return true
 		})
-		self.Send(&peersMsg{Peers: peers})
+		glog.V(logger.Warn).Infof("found initial %v peers not farther than %v", len(peers), self.proxLimit)
+		if len(peers) > 0 {
+			self.Send(&peersMsg{Peers: peers})
+		}
 	}
 	self.sentPeers = true
-	self.proxLimit = spm.ProxLimit
 	return nil
 }
 
@@ -134,11 +138,12 @@ func (p *discPeer) handlePeersMsg(msg interface{}) error {
 		nas = append(nas, addr)
 		p.peers[NodeId(addr).NodeID] = true
 	}
-	
+
 	if len(nas) == 0 {
 		glog.V(logger.Debug).Infof("whoops, no peers in incoming peersMsg from %v", p)
 		return nil
 	}
+	glog.V(logger.Debug).Infof("got peer addresses from %x, %v (%v)", p.OverlayAddr(), nas, len(nas))
 	return p.overlay.Register(nas...)
 }
 

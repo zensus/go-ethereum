@@ -18,6 +18,8 @@ package pot
 import (
 	"fmt"
 	"sync"
+	// "github.com/ethereum/go-ethereum/logger"
+	// "github.com/ethereum/go-ethereum/logger/glog"
 )
 
 const (
@@ -585,6 +587,7 @@ func (t *pot) eachBin(val PotVal, po int, f func(int, int, func(func(val PotVal,
 	for i := 0; i < lim; i++ {
 		n = t.bins[i]
 		size += n.size
+		// glog.V(logger.Debug).Infof("t.size: %v, n.size: %v, size: %v\nt:%v\nn: %v", t.size, n.size, size, t, n)
 		if n.po < po {
 			continue
 		}
@@ -605,6 +608,7 @@ func (t *pot) eachBin(val PotVal, po int, f func(int, int, func(func(val PotVal,
 		spo++
 		size += n.size
 	}
+	// glog.V(logger.Debug).Infof("t.size: %v, size: %v\nt:%v\nn:%v", t.size, size, t, n)
 	if !f(spr, t.size-size, func(g func(PotVal, int) bool) bool {
 		return t.eachFrom(func(v PotVal, j int) bool {
 			return g(v, spr)

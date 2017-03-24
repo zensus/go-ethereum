@@ -33,7 +33,7 @@ const (
 )
 
 func init() {
-	glog.SetV(0)
+	glog.SetV(6)
 	glog.SetToStderr(true)
 }
 
@@ -224,7 +224,10 @@ func TestPotSwap(t *testing.T) {
 		return true
 	})
 	if sum != 2*max {
-		t.Fatalf("incorrect number of elements. expected %v, got %v", max, sum)
+		t.Fatalf("incorrect number of elements. expected %v, got %v", 2*max, sum)
+	}
+	if sum != n.Size() {
+		t.Fatalf("incorrect size. expected %v, got %v", sum, n.Size())
 	}
 }
 
@@ -288,7 +291,79 @@ func testPotEachNeighbour(n *Pot, val PotVal, expCount int, fs ...func(PotVal, i
 	return err
 }
 
-func TestPotMerge(t *testing.T) {
+const (
+	mergeTestCount  = 5
+	mergeTestChoose = 5
+)
+
+func TestPotMergeCommon(t *testing.T) {
+	vs := make([]*testBVAddr, mergeTestCount)
+	for i := 0; i < maxEachNeighbourTests; i++ {
+
+		for i := 0; i < len(vs); i++ {
+			vs[i] = randomTestBVAddr(keylen, i)
+		}
+		max0 := rand.Intn(mergeTestChoose) + 1
+		max1 := rand.Intn(mergeTestChoose) + 1
+		n0 := NewPot(nil, 0)
+		n1 := NewPot(nil, 0)
+		glog.V(3).Infof("round %v: %v - %v", i, max0, max1)
+		m := make(map[string]bool)
+		for j := 0; j < max0; {
+			r := rand.Intn(max0)
+			v := vs[r]
+			// v := randomTestBVAddr(keylen, j)
+			_, found := n0.Add(v)
+			if !found {
+				m[v.String()] = false
+				j++
+			}
+		}
+		expAdded := 0
+
+		for j := 0; j < max1; {
+			r := rand.Intn(max1)
+			v := vs[r]
+			_, found := n1.Add(v)
+			if !found {
+				j++
+			}
+			_, found = m[v.String()]
+			if !found {
+				expAdded++
+				m[v.String()] = false
+			}
+		}
+		if i < 6 {
+			continue
+		}
+		expSize := len(m)
+		glog.V(4).Infof("%v-0: pin: %v, size: %v", i, n0.Pin(), max0)
+		glog.V(4).Infof("%v-1: pin: %v, size: %v", i, n1.Pin(), max1)
+		glog.V(4).Infof("%v: merged tree size: %v, newly added: %v", i, expSize, expAdded)
+		n, common := Union(n0, n1)
+		added := n1.Size() - common
+		size := n.Size()
+
+		if expSize != size {
+			t.Fatalf("%v: incorrect number of elements in merged pot, expected %v, got %v\n%v", i, expSize, size, n)
+		}
+		if expAdded != added {
+			t.Fatalf("%v: incorrect number of added elements in merged pot, expected %v, got %v", i, expAdded, added)
+		}
+		if !checkDuplicates(n.pot) {
+			t.Fatalf("%v: merged pot contains duplicates: \n%v", i, n)
+		}
+		for k, _ := range m {
+			_, found := n.Add(NewTestBVAddr(k, 0))
+			if !found {
+				t.Fatalf("%v: merged pot (size:%v, added: %v) missing element %v\n%v", i, size, added, k, n)
+			}
+		}
+	}
+}
+
+func TestPotMergeScale(t *testing.T) {
 	for i := 0; i < maxEachNeighbourTests; i++ {
 		max0 := rand.Intn(maxEachNeighbour) + 1
 		max1 := rand.Intn(maxEachNeighbour) + 1

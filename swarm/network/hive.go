@@ -140,7 +140,7 @@ func (self *Hive) Start(connectPeer func(string) error, af func() <-chan time.Ti
 				}
 				var i uint8
 				var err error
-				self.EachLivePeer(nil, order, func(n Peer, po int) bool {
+				self.EachLivePeer(nil, 255, func(n Peer, po int) bool {
 					glog.V(logger.Detail).Infof("%T sent to %v", req, n.ID())
 					err = n.Send(req)
 					if err == nil {
@@ -160,6 +160,7 @@ func (self *Hive) Start(connectPeer func(string) error, af func() <-chan time.Ti
 			case <-self.quit:
 				return
 			}
+			self.String()
 			glog.V(logger.Info).Infof("%v", self)
 		}
 	}()
@@ -219,6 +220,7 @@ func (self *Hive) Add(p Peer) error {
 	dp := NewDiscovery(p, self.Overlay)
 	glog.V(logger.Debug).Infof("to add new bee %v", p)
 	self.On(dp)
+	self.String()
 	glog.V(logger.Warn).Infof("%v", self)
 	//dp.NotifyProx(0)
 	return nil

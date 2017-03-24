@@ -17,6 +17,7 @@ package network
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,8 +31,42 @@ func testKadPeerAddr(s string) *peerAddr {
 	return &peerAddr{OAddr: a, UAddr: a}
 }
 
-func testKadPeer(s string) *bzzPeer {
-	return &bzzPeer{peerAddr: testKadPeerAddr(s)}
+type testDiscPeer struct {
+	Peer
+	lock          *sync.Mutex
+	notifications map[string]uint8
+}
+
+type testPeerNotification struct {
+	rec  string
+	addr string
+	po   uint8
+}
+
+type testProxNotification struct {
+	rec string
+	po  uint8
+}
+
+func (self *testDiscPeer) NotifyProx(po uint8) error {
+	key := overlayStr(self)
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	self.notifications[key] = po
+	return nil
+}
+
+func (self *testDiscPeer) NotifyPeer(p Peer, po uint8) error {
+	key := overlayStr(self)
+	key += overlayStr(p)
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	self.notifications[key] = po
+	return nil
+}
+
+func (k *testKademlia) newTestKadPeer(s string) *testDiscPeer {
+	return &testDiscPeer{&bzzPeer{peerAddr: testKadPeerAddr(s)}, k.lock, k.notifications}
 }
 
 func testStr(a PeerAddr) string {
@@ -39,16 +74,30 @@ func testStr(a PeerAddr) string {
 	if s == nil {
 		return "<nil>"
 	}
-	// return s.String()
-	// return fmt.Sprintf("%06x", s.OverlayAddr())
-	return pot.NewHashAddressFromBytes(a.(*KadPeer).PeerAddr.OverlayAddr()).Bin()[:6]
-	// return a.(*KadPeer).String()[:6] //.HashAddress.String()[:6]
-	// return a.(*KadPeer).String() //[:6] //.HashAddress.String()[:6]
-	// return "wtf"
+	return pot.NewHashAddressFromBytes(s.OverlayAddr()).Bin()[:6]
+}
+
+func overlayStr(a PeerAddr) string {
+	if a == (*KadPeer)(nil) || a == (*testDiscPeer)(nil) || a == nil {
+		return "<nil>"
+	}
+	var p Peer
+	s, ok := a.(*KadPeer)
+	if ok {
+		p = s.Peer
+	} else {
+		p = a.(*testDiscPeer).Peer
+	}
+	if p == nil {
+		return "<nil>"
+	}
+	return pot.NewHashAddressFromBytes(p.OverlayAddr()).Bin()[:6]
 }
 
 type testKademlia struct {
 	*Kademlia
+	lock          *sync.Mutex
+	notifications map[string]uint8
 }
 
 func newTestKademlia(b string) *testKademlia {
@@ -56,20 +105,22 @@ func newTestKademlia(b string) *testKademlia {
 	params.MinBinSize = 1
 	params.MinProxBinSize = 2
 	base := pot.NewHashAddress(b).Bytes()
-	return &testKademlia{NewKademlia(base, params)}
+	return &testKademlia{NewKademlia(base, params), &sync.Mutex{}, make(map[string]uint8)}
 }
 
 func (k *testKademlia) On(ons ...string) *testKademlia {
 	for _, s := range ons {
-		k.Kademlia.On(testKadPeer(s))
+		p := k.newTestKadPeer(s)
+		k.Kademlia.On(p)
 	}
 	return k
 }
 
 func (k *testKademlia) Off(offs ...string) *testKademlia {
 	for _, s := range offs {
-		k.Kademlia.Off(testKadPeer(s))
+		k.Kademlia.Off(k.newTestKadPeer(s))
 	}
+
 	return k
 }
 
@@ -99,6 +150,8 @@ func testSuggestPeer(t *testing.T, k *testKademlia, expAddr string, expPo int, e
 func TestSuggestPeerFindPeers(t *testing.T) {
 	// 2 row gap, unsaturated proxbin, no callables -> want PO 0
 	k := newTestKademlia("000000").On("001000")
+	// k.MinProxBinSize = 2
+	// k.MinBinSize = 2
 	err := testSuggestPeer(t, k, "<nil>", 0, true)
 	if err != nil {
 		t.Fatal(err.Error())
@@ -275,8 +328,79 @@ func TestSuggestPeerRetries(t *testing.T) {
 func TestKademliaHiveString(t *testing.T) {
 	k := newTestKademlia("000000").On("010000", "001000").Register("100000", "100001")
 	h := k.String()
-	expH := "\n=========================================================================\nMon Feb 27 12:10:28 UTC 2017 KΛÐΞMLIΛ hive: queen's address: 000000\npopulation: 2 (4), ProxBinSize: 2, MinBinSize: 1, MaxBinSize: 4\n============ PROX LIMIT: 0 ==========================================\n000  0                                           |  2 840000 800000\n001  1 400000                                    |  1 400000\n002  1 200000                                    |  1 200000\n003  0                                           |  0\n004  0                                           |  0\n005  0                                           |  0\n006  0                                           |  0\n007  0                                           |  0\n========================================================================="
+	expH := "\n=========================================================================\nMon Feb 27 12:10:28 UTC 2017 KΛÐΞMLIΛ hive: queen's address: 000000\npopulation: 2 (4), MinProxBinSize: 2, MinBinSize: 1, MaxBinSize: 4\n============ PROX LIMIT: 0 ==========================================\n000  0                                           |  2 840000 800000\n001  1 400000                                    |  1 400000\n002  1 200000                                    |  1 200000\n003  0                                           |  0\n004  0                                           |  0\n005  0                                           |  0\n006  0                                           |  0\n007  0                                           |  0\n========================================================================="
 	if expH[100:] != h[100:] {
 		t.Fatalf("incorrect hive output. expected %v, got %v", expH, h)
 	}
+}
+
+func (self *testKademlia) checkNotifications(npeers []*testPeerNotification, nprox []*testProxNotification) error {
+	for _, pn := range npeers {
+		key := pn.rec + pn.addr
+		po, found := self.notifications[key]
+		if !found || pn.po != po {
+			return fmt.Errorf("%v, expected to have notified %v about peer %v (%v)", key, pn.rec, pn.addr, pn.po)
+		}
+		delete(self.notifications, key)
+	}
+	for _, pn := range nprox {
+		key := pn.rec
+		po, found := self.notifications[key]
+		if !found || pn.po != po {
+			return fmt.Errorf("expected to have notified %v about new prox limit %v", pn.rec, pn.po)
+		}
+		delete(self.notifications, key)
+	}
+	if len(self.notifications) > 0 {
+		return fmt.Errorf("%v unexpected notifications", len(self.notifications))
+	}
+	return nil
+}
+
+func TestNotifications(t *testing.T) {
+	k := newTestKademlia("000000")
+	k.MinProxBinSize = 3
+	k.On("010000", "001000")
+	time.Sleep(100 * time.Millisecond)
+	err := k.checkNotifications(
+		[]*testPeerNotification{
+			&testPeerNotification{"010000", "001000", 1},
+		},
+		[]*testProxNotification{
+			&testProxNotification{"001000", 0},
+			&testProxNotification{"010000", 0},
+		},
+	)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	k = k.On("100000")
+	time.Sleep(100 * time.Millisecond)
+
+	k.checkNotifications(
+		[]*testPeerNotification{
+			&testPeerNotification{"010000", "100000", 0},
+			&testPeerNotification{"001000", "100000", 0},
+		},
+		[]*testProxNotification{
+			&testProxNotification{"100000", 0},
+		},
+	)
+
+	k = k.On("010001")
+	time.Sleep(100 * time.Millisecond)
+
+	k.checkNotifications(
+		[]*testPeerNotification{
+			&testPeerNotification{"010000", "010001", 5},
+			&testPeerNotification{"001000", "010001", 1},
+			&testPeerNotification{"100000", "010001", 0},
+		},
+		[]*testProxNotification{
+			&testProxNotification{"100000", 0},
+			&testProxNotification{"010000", 0},
+			&testProxNotification{"010001", 0},
+			&testProxNotification{"001000", 0},
+		},
+	)
 }

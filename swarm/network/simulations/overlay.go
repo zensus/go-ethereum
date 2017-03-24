@@ -60,16 +60,17 @@ func (self *Network) NewSimNode(conf *simulations.NodeConfig) adapters.NodeAdapt
 	na := adapters.NewSimNode(id, self.Network, adapters.NewSimPipe)
 	addr := network.NewPeerAddrFromNodeId(id)
 	kp := network.NewKadParams()
+
 	kp.MinProxBinSize = 4
-	kp.MinBinSize = 4
+	kp.MinBinSize = 1
 	to := network.NewKademlia(addr.OverlayAddr(), kp) // overlay topology driver
 	// to := network.NewTestOverlay(addr.OverlayAddr())   // overlay topology driver
 	hp := network.NewHiveParams()
 	hp.CallInterval = 5000
-	pp := network.NewHive(hp, to) // hive
-	self.hives = append(self.hives, pp)                // remember hive
+	pp := network.NewHive(hp, to)       // hive
+	self.hives = append(self.hives, pp) // remember hive
 	// bzz protocol Run function. messaging through SimPipe
-	
+
 	services := func(p network.Peer) error {
 		dp := network.NewDiscovery(p, to)
 		pp.Add(dp)
@@ -79,7 +80,7 @@ func (self *Network) NewSimNode(conf *simulations.NodeConfig) adapters.NodeAdapt
 		})
 		return nil
 	}
-	
+
 	ct := network.BzzCodeMap(network.HiveMsgs...) // bzz protocol code map
 	na.Run = network.Bzz(addr.OverlayAddr(), na, ct, services, nil, nil).Run
 	connect := func(s string) error {
@@ -112,7 +113,7 @@ func nethook(conf *simulations.NetworkConfig) (simulations.NetworkControl, *simu
 	net := NewNetwork(simulations.NewNetwork(conf))
 
 	//ids := p2ptest.RandomNodeIds(10)
-	ids := adapters.RandomNodeIds(10)
+	ids := adapters.RandomNodeIds(7)
 
 	for i, id := range ids {
 		net.NewNode(&simulations.NodeConfig{Id: id})
@@ -151,7 +152,7 @@ func nethook(conf *simulations.NetworkConfig) (simulations.NetworkControl, *simu
 // var server
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	glog.SetV(logger.Detail)
+	glog.SetV(logger.Debug)
 	glog.SetToStderr(true)
 
 	c, quitc := simulations.NewSessionController(nethook)
