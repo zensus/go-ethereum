@@ -69,7 +69,7 @@ type DbStore struct {
 
 	// this should be stored in db, accessed transactionally
 	entryCnt, accessCnt, dataIdx, capacity uint64
-	bucketCnt                              []byte
+	bucketCnt                              []uint64
 
 	gcPos, gcStartPos []byte
 	gcArray           []*gcItem
@@ -107,8 +107,9 @@ func NewDbStore(path string, hash Hasher, capacity uint64, po func(Key) uint8) (
 	for i := 0; i < 0x100; i++ {
 		k := make([]byte, 2)
 		k[0] = keyDistanceCnt
-		k[1] = i
-		s.bucketCnt[i] = s.db.Get(k)
+		k[1] = byte(uint8(i))
+		cnt, _ := s.db.Get(k)
+		s.bucketCnt[i] = BytesToU64(cnt)
 	}
 	data, _ = s.db.Get(keyAccessCnt)
 	//s.accessCnt = BytesToU64(data)
@@ -428,7 +429,7 @@ func (s *DbStore) Put(chunk *Chunk) {
 	po := s.po(chunk.Key)
 	t_datakey := getDataKey(s.dataIdx, po)
 	batch.Put(t_datakey, data)
-	log.Trace(fmt.Sprintf("batch put: dataidx %v prox %v chunkkey %v datakey %v data %v", s.dataIdx, s.po(chunk.Key), hex.EncodeToString(chunk.Key), t_datakey, hex.EncodeToString(data[0:64])))
+	log.Trace(fmt.Sprintf("batch put: datai		dx %v prox %v chunkkey %v datakey %v data %v", s.dataIdx, s.po(chunk.Key), hex.EncodeToString(chunk.Key), t_datakey, hex.EncodeToString(data[0:64])))
 
 	index.Idx = s.dataIdx
 	s.updateIndexAccess(&index)
