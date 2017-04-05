@@ -79,7 +79,7 @@ func proximity(one, other []byte) (ret int) {
 	ret = int(int8(retbig))
 	return
 }*/
-func proximity(one, other []byte) (ret int) {
+func Proximity(one, other []byte) (ret int) {
 	for i := 0; i < len(one); i++ {
 		oxo := one[i] ^ other[i]
 		for j := 0; j < 8; j++ {

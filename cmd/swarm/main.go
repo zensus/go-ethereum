@@ -216,7 +216,7 @@ Removes a path from the manifest
 			Usage:     "Cleans database of corrupted entries",
 			ArgsUsage: " ",
 			Description: `
-Cleans database of corrupted entries.
+Cleans database of corrupted entries. needs account flag
 `,
 		},
 		{

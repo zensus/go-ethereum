@@ -32,7 +32,7 @@ const (
 	requestDbBatchSize = 512  // size of batch before written to request db
 	keyBufferSize      = 1024 // size of buffer  for unsynced keys
 	syncBatchSize      = 128  // maximum batchsize for outgoing requests
-	historyBufferSize  = 128  // maximum batchsize for outgoing requests
+	historyBufferSize  = 128  // maximum size for history iteration buffer
 	syncBufferSize     = 128  // size of buffer  for delivery requests
 	syncCacheSize      = 1024 // cache capacity to store request queue in memory
 )

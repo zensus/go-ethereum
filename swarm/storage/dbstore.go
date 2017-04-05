@@ -612,11 +612,11 @@ func Import(sourcepath string, targetpath string, sourceaccountkey string, targe
 	log.Trace(fmt.Sprintf("srckey %x targetkey %x", sourceaccountkeyhash, targetaccountkeyhash))
 
 	pofunc_source := func(k Key) (ret uint8) {
-		return uint8(proximity(sourceaccountkeyhash[:], k[:]))
+		return uint8(Proximity(sourceaccountkeyhash[:], k[:]))
 	}
 
 	pofunc_target := func(k Key) (ret uint8) {
-		return uint8(proximity(targetaccountkeyhash[:], k[:]))
+		return uint8(Proximity(targetaccountkeyhash[:], k[:]))
 	}
 
 	if !databaseExists(sourcepath) {
