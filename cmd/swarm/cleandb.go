@@ -32,6 +32,22 @@ import (
 )
 
 func cleandb(ctx *cli.Context) {
+	dbStore, err := setupDb(ctx)
+	if err != nil {
+		utils.Fatalf("Cannot initialise dbstore: %v", err)
+	}
+	dbStore.Cleanup()
+}
+
+func dumpdb(ctx *cli.Context) {
+	dbStore, err := setupDb(ctx)
+	if err != nil {
+		utils.Fatalf("Cannot initialise dbstore: %v", err)
+	}
+	dbStore.Cleanup()
+}
+
+func setupDb(ctx *cli.Context) (*storage.DbStore, error) {
 	args := ctx.Args()
 	if len(args) != 0 {
 		utils.Fatalf("Takes no argument")
@@ -59,9 +75,5 @@ func cleandb(ctx *cli.Context) {
 	log.Trace(fmt.Sprintf("bzzkey %v", sourceconfig.BzzKey))
 
 	basekey := common.HexToHash(sourceconfig.BzzKey[2:])
-	dbStore, err := storage.NewDbStore(filepath.Join(bzzdir, "chunks"), hash, 10000000, func(k storage.Key) (ret uint8) { return uint8(storage.Proximity(basekey[:], k[:])) })
-	if err != nil {
-		utils.Fatalf("Cannot initialise dbstore: %v", err)
-	}
-	dbStore.Cleanup()
+	return storage.NewDbStore(filepath.Join(bzzdir, "chunks"), hash, 10000000, func(k storage.Key) (ret uint8) { return uint8(storage.Proximity(basekey[:], k[:])) })
 }

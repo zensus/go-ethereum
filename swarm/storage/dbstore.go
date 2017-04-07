@@ -334,6 +334,26 @@ func (s *DbStore) Cleanup() {
 	log.Warn(fmt.Sprintf("Found %v errors out of %v entries", errorsFound, total))
 }
 
+func (s *DbStore) Dump() {
+	//Iterates over the database and checks that there are no faulty chunks
+	it := s.db.NewIterator()
+	startPosition := []byte{kpIndex}
+	it.Seek(startPosition)
+	var key []byte
+	var total int
+	for it.Valid() {
+		key = it.Key()
+		if (key == nil) || (key[0] != kpIndex) {
+			break
+		}
+		total++
+		fmt.Printf("%x\n", key[1:])
+		it.Next()
+	}
+	it.Release()
+	log.Warn(fmt.Sprintf("logged %v chunks", total))
+}
+
 func (s *DbStore) ReIndex() {
 	//Iterates over the database and checks that there are no faulty chunks
 	it := s.db.NewIterator()
