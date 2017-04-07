@@ -44,7 +44,7 @@ func dumpdb(ctx *cli.Context) {
 	if err != nil {
 		utils.Fatalf("Cannot initialise dbstore: %v", err)
 	}
-	dbStore.Cleanup()
+	dbStore.Dump()
 }
 
 func setupDb(ctx *cli.Context) (*storage.DbStore, error) {
