@@ -1,6 +1,21 @@
-package storage
+// Copyright 2017 The go-ethereum Authors
+// This file is part of the go-ethereum library.
+//
+// The go-ethereum library is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// The go-ethereum library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// provides a binary merkle tree implementation.
+// provides a binary merkle tree implementation
+package bmt
 
 import (
 	"fmt"
@@ -24,22 +39,27 @@ type Hasher func() hash.Hash
 // the tree and itself in a state reusable for hashing a new chunk
 type BMTHasher struct {
 	pool      *BMTreePool // BMT resource pool
+	release   bool        // whether to release the Tree to the pool
 	bmt       *BMTree     // prebuilt BMT resource for flowcontrol and proofs
 	blocksize int         // segment size (size of hash) also for hash.Hash
 	count     int         // segment count
 	size      int         // for hash.Hash same as hashsize
 	cur       int         // cursor position for righmost currently open chunk
 	segment   []byte      // the rightmost open segment (not complete)
+	depth     int         // index of last level
 	result    chan []byte // result channel
+	hash      []byte      // to record the result
 	max       int32       // max segments for SegmentWriter interface
 }
 
 // creates a reusable BMTHasher
 // implements the hash.Hash interface
 // pulls a new BMTree from a resource pool for hashing each chunk
-func NewBMTHasher(p *BMTreePool) *BMTHasher {
+func NewBMTHasher(p *BMTreePool, release bool) *BMTHasher {
 	return &BMTHasher{
 		pool:      p,
+		release:   release,
+		depth:     depth(p.SegmentCount),
 		size:      p.SegmentSize,
 		blocksize: p.SegmentSize,
 		count:     p.SegmentCount,
@@ -50,25 +70,25 @@ func NewBMTHasher(p *BMTreePool) *BMTHasher {
 // a reuseable segment hasher representing a node in a BMT
 // it allows for continued writes after a Sum
 // and is left in completely reusable state after Reset
-type BMTNodeHasher struct {
-	level, index        int            // position of node for information/logging only
-	initial             bool           // first and last node
-	unbalanced          bool           // indicates if a node has only the left segment
-	left, right, parent *BMTNodeHasher // BMT connections
-	state               int32          // changed via atomic
-	hash                []byte         // to record the result so can append/continue writing after Sum
-	root                chan []byte    // to indicate the root node for smaller chunks.
-	hasher              hash.Hash      // always reset after cycle of use
+type BMTNode struct {
+	level, index int      // position of node for information/logging only
+	initial      bool     // first and last node
+	root         bool     // whether the node is root to a smaller BMT
+	isLeft       bool     // whether it is left side of the parent double segment
+	unbalanced   bool     // indicates if a node has only the left segment
+	parent       *BMTNode // BMT connections
+	state        int32    // atomic increment impl concurrent boolean toggle
+	left, right  []byte
 }
 
 // constructor for segment hasher nodes in the BMT
-func NewBMTNodeHasher(level, index int, parent *BMTNodeHasher, hasher Hasher) *BMTNodeHasher {
-	self := &BMTNodeHasher{
+func NewBMTNode(level, index int, parent *BMTNode) *BMTNode {
+	self := &BMTNode{
 		parent:  parent,
-		hasher:  hasher(),
 		level:   level,
 		index:   index,
 		initial: index == 0,
+		isLeft:  index%2 == 0,
 	}
 	return self
 }
@@ -135,10 +155,7 @@ func (self *BMTreePool) Reserve() *BMTree {
 // Releases a BMTree to the pool. the BMTree is guaranteed to be in reusable state
 // does not need locking
 func (self *BMTreePool) Release(t *BMTree) {
-	select {
-	case self.c <- t: // can never fail but...
-	default:
-	}
+	self.c <- t // can never fail but...
 }
 
 // reusable control structure representing a BMT
@@ -146,50 +163,36 @@ func (self *BMTreePool) Release(t *BMTree) {
 // BMTHasher uses a BMTreePool to pick one for each chunk hash
 // the BMTree is 'locked' while not in the pool
 type BMTree struct {
-	leaves []*BMTNodeHasher
-	result chan []byte
+	leaves []*BMTNode
 }
 
 // draws the BMT (badly)
-func (self *BMTree) Draw() string {
+func (self *BMTree) Draw(hash []byte, d int) string {
 	var left, right []string
-	var anc []*BMTNodeHasher
+	var anc []*BMTNode
 	for i, n := range self.leaves {
+		left = append(left, fmt.Sprintf("%v", hashstr(n.left)))
 		if i%2 == 0 {
-			left = append(left, fmt.Sprintf("%v", hashstr(n.hash)))
 			anc = append(anc, n.parent)
-		} else {
-			right = append(right, fmt.Sprintf("%v", hashstr(n.hash)))
 		}
+		right = append(right, fmt.Sprintf("%v", hashstr(n.right)))
 	}
 	anc = self.leaves
 	var hashes [][]string
-	l := 0
-	for {
-		var nodes []*BMTNodeHasher
+	for l := 0; len(anc) > 0; l++ {
+		var nodes []*BMTNode
+		hash := []string{""}
 		for i, n := range anc {
-			if i%2 == 0 {
-				if n.parent == nil {
-					panic("nooo")
-				}
+			hash = append(hash, fmt.Sprintf("%v|%v", hashstr(n.left), hashstr(n.right)))
+			if i%2 == 0 && n.parent != nil {
 				nodes = append(nodes, n.parent)
-			}
-		}
-		hash := []string{}
-		l++
-		for i, n := range nodes {
-			hash = append(hash, fmt.Sprintf("%v", hashstr(n.hash)))
-			if i%2 == 0 && n.right != nil {
-				hash = append(hash, "+")
 			}
 		}
 		hash = append(hash, "")
 		hashes = append(hashes, hash)
 		anc = nodes
-		if anc[0].parent == nil {
-			break
-		}
 	}
+	hashes = append(hashes, []string{"", fmt.Sprintf("%v", hashstr(hash)), ""})
 	total := 60
 	del := "                             "
 	var rows []string
@@ -222,40 +225,28 @@ func (self *BMTree) Draw() string {
 // segmentSize * segmentCount determines the maximum chunk size
 // hashed using the tree
 func NewBMTree(hasher Hasher, segmentSize, segmentCount int) *BMTree {
-	n := NewBMTNodeHasher(0, 0, nil, hasher)
-	n.root = make(chan []byte)
-	prevlevel := []*BMTNodeHasher{n}
+	n := NewBMTNode(0, 0, nil)
+	n.root = true
+	prevlevel := []*BMTNode{n}
 	// iterate over levels and creates 2^level nodes
-	count := 2
-	if count > segmentCount {
-		count = segmentCount
-	}
 	level := 1
-	for {
-		nodes := make([]*BMTNodeHasher, count)
+	count := 2
+	for d := 1; d <= depth(segmentCount); d++ {
+		nodes := make([]*BMTNode, count)
 		for i, _ := range nodes {
-			var parent *BMTNodeHasher
+			var parent *BMTNode
 			parent = prevlevel[i/2]
-			t := NewBMTNodeHasher(level, i, parent, hasher)
+			t := NewBMTNode(level, i, parent)
 			// fmt.Printf("created node level %v, index: %v/%v\n", level, i, count)
 			nodes[i] = t
-			if i%2 == 0 {
-				parent.left = t
-			} else {
-				parent.right = t
-			}
 		}
 		prevlevel = nodes
-		if count >= segmentCount {
-			break
-		}
 		level++
 		count *= 2
 	}
 	// the datanode level is the nodes on the last level where
 	return &BMTree{
 		leaves: prevlevel,
-		result: n.root,
 	}
 }
 
@@ -277,17 +268,20 @@ func (self *BMTHasher) Sum(b []byte) (r []byte) {
 	t := self.getTree()
 	self.Write(b)
 	i := self.cur
-	if i == 0 {
-		h := self.pool.hasher()
-		h.Write(self.segment)
-		return h.Sum(nil)
-	}
+	// fmt.Printf("finalise for node index %v (leaves: %v)\n", i, len(t.leaves))
 	n := t.leaves[i]
+	j := i
 	// must run strictly before all nodes calculate
 	// datanodes are guaranteed to have a parent
-	n.parent.finalise(i%2 == 0, t.result)
-	self.writeSegment(i, self.segment)
-	return <-t.result
+	if len(self.segment) > self.size && i > 0 && n.parent != nil {
+		n = n.parent
+	} else {
+		i *= 2
+	}
+	d := self.finalise(n, i)
+	// fmt.Printf("finalise for node level %v index %v depth %v\n", n.level, i, d)
+	self.writeSegment(j, self.segment, d)
+	return <-self.result
 }
 
 // BMTHasher implements the io.Writer interface
@@ -302,21 +296,30 @@ func (self *BMTHasher) Write(b []byte) (int, error) {
 	}
 	s := self.segment
 	i := self.cur
+	count := (self.count + 1) / 2
+	need := self.count*self.size - self.cur*2*self.size
 	size := self.size
+	if need > size {
+		size *= 2
+	}
+	if l < need {
+		need = l
+	}
 	// calculate missing bit to complete current open segment
 	rest := size - len(s)
-	if l < rest {
-		rest = l
+	if need < rest {
+		rest = need
 	}
 	s = append(s, b[:rest]...)
-	l -= rest
+	need -= rest
+	// fmt.Printf("l: %v, s: %x, need: %v, size: %v, index: %v\n", l, s, need, size, self.cur)
 	// read full segments and the last possibly partial segment
-	for l > 0 && i < self.count-1 {
+	for need > 0 && i < count-1 {
 		// push all finished chunks we read
-		self.writeSegment(i, s)
-		l -= size
-		if l < 0 {
-			size += l
+		self.writeSegment(i, s, self.depth)
+		need -= size
+		if need < 0 {
+			size += need
 		}
 		s = b[rest : rest+size]
 		rest += size
@@ -355,7 +358,6 @@ func (self *BMTHasher) ReadFrom(r io.Reader) (m int64, err error) {
 			break
 		}
 	}
-
 	return int64(read), err
 }
 
@@ -363,14 +365,17 @@ func (self *BMTHasher) ReadFrom(r io.Reader) (m int64, err error) {
 // it resets tree, segment and index
 func (self *BMTHasher) Reset() {
 	if self.bmt != nil {
-		for n := self.bmt.leaves[self.cur]; n != nil; n = n.parent {
+		n := self.bmt.leaves[self.cur]
+		for ; n != nil; n = n.parent {
 			n.unbalanced = false
-			if n.right != nil {
-				n.right.hash = nil
+			if n.parent != nil {
+				n.root = false
 			}
 		}
-		self.pool.Release(self.bmt)
-		self.bmt = nil
+		if self.release {
+			self.pool.Release(self.bmt)
+			self.bmt = nil
+		}
 	}
 	self.cur = 0
 	self.segment = nil
@@ -403,99 +408,71 @@ func (self *BMTHasher) WriteSegment(i int, s []byte) (err error) {
 	if rightmost {
 		self.segment = s
 	} else {
-		err = self.writeSegment(i, s)
-		if err != nil {
-			return err
-		}
-	}
-	if !last {
-		return
-	}
-	self.bmt.leaves[int(self.max-1)].parent.finalise(i%2 == 0, self.result)
-	return self.writeSegment(int(self.max-1), self.segment)
-}
-
-func (self *BMTHasher) writeSegment(i int, s []byte) error {
-	n := self.bmt.leaves[i]
-	go func() {
-		n.hash = s
-		n.parent.pull(s, i%2 == 0)
-	}()
-	return nil
-}
-
-func (self *BMTNodeHasher) push(i int, s []byte) {
-	self.hash = s
-
-	if self.root != nil {
-		// reset root to false unless toplevel
-		// fmt.Printf("%v/%v push root %v\n", self.level, self.index, hashstr(s))
-		r := self.root
-		if self.parent != nil {
-			self.root = nil
-		}
-		r <- s
-		return
-	}
-	if self.parent.unbalanced {
-		// fmt.Printf("%v/%v pushing into unbalanced nodes parent %v\n", self.level, self.index, hashstr(s))
-		self.parent.push(self.parent.index, s)
-		return
-	}
-	// fmt.Printf("%v/%v pulled into parent %v\n", self.level, self.index, hashstr(s))
-	self.parent.pull(s, i%2 == 0)
-}
-
-func (self *BMTNodeHasher) pull(s []byte, left bool) {
-	// always read left segment into the hasher BEFORE toggling state
-	if left {
-		// fmt.Printf("%v/%v pull from left %v\n", self.level, self.index, hashstr(s))
-		self.hasher.Write(s)
-	} else {
-		// fmt.Printf("%v/%v pull from right %v\n", self.level, self.index, hashstr(s))
-	}
-
-	if self.right != nil && !self.unbalanced {
-		// fmt.Printf("%v/%v toggle state left=%v\n", self.level, self.index, left)
-		if self.toggle() {
-			// fmt.Printf("%v/%v terminate first thread left=%v\n", self.level, self.index, left)
+		self.writeSegment(i, s, self.depth)
+		if !last {
 			return
 		}
-		// fmt.Printf("%v/%v second thread adding hash %v left=%v\n", self.level, self.index, hashstr(self.right.hash), left)
-
-		self.hasher.Write(self.right.hash)
 	}
-	self.hash = self.hasher.Sum(nil)
-	self.hasher.Reset()
-
-	self.push(self.index, self.hash)
+	n := self.bmt.leaves[int(self.max-1)/2]
+	d := self.finalise(n, i)
+	self.writeSegment(i, self.segment, d)
+	return
 }
 
-// it is lilke following the zigzags on the tree belonging
-// to the final datasegment
-func (self *BMTNodeHasher) finalise(left bool, result chan []byte) {
+func (self *BMTHasher) writeSegment(i int, s []byte, d int) {
+	h := self.pool.hasher()
+	n := self.bmt.leaves[i]
 
-	// return if that actual tree top node is
-	if self.root != nil {
+	if len(s) > self.size && n.parent != nil {
+		go func() {
+			h.Write(s)
+			s = h.Sum(nil)
+			h.Reset()
+			if n.root {
+				self.result <- s
+				return
+			}
+			self.run(n.parent, h, d, n.index, s)
+		}()
 		return
 	}
-	// the root node is a node that is on the left edge and not on the dataside
-	// this necessitates that finalise is starting on the parent level
-	// if the left edge is reached install the result channel and
-	// terminate the finalise routine
+	go self.run(n, h, d, i*2, s)
+}
 
-	if self.initial {
-		self.root = result
-		return
+func (self *BMTHasher) run(n *BMTNode, h hash.Hash, d int, i int, s []byte) {
+	isLeft := i%2 == 0
+	for {
+		if isLeft {
+			n.left = s
+			// fmt.Printf("->%v/%v left %v\n", n.level, n.index, hashstr(s))
+		} else {
+			n.right = s
+			// fmt.Printf("->%v/%v right %v\n", n.level, n.index, hashstr(s))
+		}
+		if !n.unbalanced && n.toggle() {
+			return
+		}
+		if !n.unbalanced || !isLeft || i == 0 && d == 0 {
+			h.Write(n.left)
+			h.Write(n.right)
+			s = h.Sum(nil)
+			h.Reset()
+		} else {
+			s = append(n.left, n.right...)
+		}
+
+		self.hash = s
+		if n.root {
+			// fmt.Printf("%v/%v depth: %v, root hash %v\n", n.level, n.index, d, hashstr(s))
+			self.result <- s
+			return
+		}
+
+		// fmt.Printf("%v/%v->%v/%v/%v %v\n", n.level, i, n.parent.level, i/2, i%2, hashstr(s))
+		isLeft = n.isLeft
+		n = n.parent
+		i++
 	}
-	// when the final segment's path is going via left segments
-	// the incoming data is pushed to the parent upon pulling the left
-	// we do not need toogle the state since this condition is
-	// detectable
-	self.unbalanced = left
-	// fmt.Printf("%v/%v finalise %v\n", self.level, self.index, self.unbalanced)
-
-	self.parent.finalise(self.index%2 == 0, result)
 }
 
 // obtains a BMT resource by reserving one from the pool
@@ -511,13 +488,45 @@ func (self *BMTHasher) getTree() *BMTree {
 // atomic bool toggle implementing a concurrent reusable bi-state object
 // atomic addint with %2 implements atomic bool toggle
 // it returns true if the toggler just put it in the active/waiting state
-func (self *BMTNodeHasher) toggle() bool {
+func (self *BMTNode) toggle() bool {
 	return atomic.AddInt32(&self.state, 1)%2 == 1
 }
+
 func hashstr(b []byte) string {
 	end := len(b)
 	if end > 4 {
 		end = 4
 	}
 	return fmt.Sprintf("%x", b[:end])
+}
+
+func depth(n int) (d int) {
+	for l := (n - 1) / 2; l > 0; l /= 2 {
+		d++
+	}
+	return d
+}
+
+// it is following the zigzags on the tree belonging
+// to the final datasegment
+func (self *BMTHasher) finalise(n *BMTNode, i int) (d int) {
+	isLeft := i%2 == 0
+	for {
+		// when the final segment's path is going via left segments
+		// the incoming data is pushed to the parent upon pulling the left
+		// we do not need toogle the state since this condition is
+		// detectable
+		n.unbalanced = isLeft
+		n.right = nil
+		// fmt.Printf("%v/%v unbalanced %v\n", n.level, n.index, n.unbalanced)
+		if n.initial {
+			// fmt.Printf("%v/%v initial node found, depth: %v\n", n.level, n.index, d)
+			n.root = true
+			return d
+		}
+		isLeft = n.isLeft
+		n = n.parent
+		d++
+	}
+	return d
 }
