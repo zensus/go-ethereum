@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
+	
 	p2ptest "github.com/ethereum/go-ethereum/p2p/testing"
 )
 
@@ -152,45 +153,22 @@ func TestPssCache(t *testing.T) {
 	}
 
 	// check the sender cache
-	err = ps.addFwdCacheSender(fwdaddr.OverlayAddr(), digest)
+	err = ps.addCache(fwdaddr.OverlayAddr(), digest)
 	if err != nil {
 		t.Fatalf("write to pss sender cache failed: %v", err)
 	}
 	
-	if !ps.checkFwdCache(fwdaddr.OverlayAddr(), digest) {
+	if !ps.checkCache(fwdaddr.OverlayAddr(), digest) {
 		t.Fatalf("message %v should have SENDER record in cache but checkCache returned false", msg)
 	}
 
-	if ps.checkFwdCache(fwdaddr.OverlayAddr(), digesttwo) {
+	if ps.checkCache(fwdaddr.OverlayAddr(), digesttwo) {
 		t.Fatalf("message %v should NOT have SENDER record in cache but checkCache returned true", msgtwo)
 	}
 
-	// check the expire cache
-	err = ps.addFwdCacheExpire(digest)
-	if err != nil {
-		t.Fatalf("write to pss expire cache failed: %v", err)
-	}
-
-	if !ps.checkFwdCache(nil, digest) {
-		t.Fatalf("message %v should have EXPIRE record in cache but checkCache returned false", msg)
-	}
-
-	if ps.checkFwdCache(nil, digesttwo) {
-		t.Fatalf("message %v should NOT have EXPIRE record in cache but checkCache returned true", msgtwo)
-	}
-	
 	time.Sleep(pp.Cachettl)
-	if ps.checkFwdCache(nil, digest) {
+	if ps.checkCache(fwdaddr.OverlayAddr(), digest) {
 		t.Fatalf("message %v should have expired from cache but checkCache returned true", msg)
-	}
-	
-	err = ps.AddToCache(fwdaddr.OverlayAddr(), msgtwo)
-	if err != nil {
-		t.Fatalf("public accessor cache write failed: %v", err)
-	}
-	
-	if !ps.checkFwdCache(fwdaddr.OverlayAddr(), digesttwo) {
-		t.Fatalf("message %v should have SENDER record in cache but checkCache returned false", msgtwo)
 	}
 }
 
@@ -254,7 +232,7 @@ var action func(ctx context.Context) error
 	expectnodes := make(map[*adapters.NodeId]int) // how many messages we're expecting on each respective node
 	expectnodesids := []*adapters.NodeId{} // the nodes to expect on (needed by checker)
 	expectnodesresults := make(map[*adapters.NodeId][]int) // which messages expect actually got
-	
+
 	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &PssTestPayload{})
 	topic, _ := MakeTopic(protocolName, protocolVersion)
 
@@ -417,6 +395,32 @@ var action func(ctx context.Context) error
 	}
 
 	t.Log("Simulation Passed:")
+	for i := 0; i < len(sends); i += 2 {
+		t.Logf("Pss #%d: oaddr %x -> %x (uaddr %x -> %x)", i / 2 + 1,
+			common.ByteLabel(nodes[fullnodes[sends[i]]].Pss.GetAddr().OverlayAddr()),
+			common.ByteLabel(nodes[fullnodes[sends[i+1]]].Pss.GetAddr().OverlayAddr()),
+			common.ByteLabel(fullnodes[sends[i]].Bytes()),
+			common.ByteLabel(fullnodes[sends[i+1]].Bytes()))
+	}
+	for id, results := range expectnodesresults {
+		fails := 0
+		for _, r := range results {
+			if r == -1 {
+				fails++
+			}
+		}
+		t.Logf("Node oaddr %x (uaddr %x) was sent %d msgs, of which %d failed", common.ByteLabel(id.Bytes()), common.ByteLabel(nodes[id].Pss.GetAddr().OverlayAddr()), len(results), fails)
+	}
+	
+	
+	for _, node := range nodes {
+		logstring := fmt.Sprintf("Node oaddr %x kademlia: ", common.ByteLabel(node.Pss.Overlay.GetAddr().OverlayAddr()))
+		node.Pss.Overlay.EachLivePeer(nil, 256, func(p Peer, po int) bool {
+ 			logstring += fmt.Sprintf("%x ", common.ByteLabel(p.OverlayAddr()))
+			return true
+		})
+		t.Log(logstring)
+	}
 }
 
 // pss simulation test

@@ -27,6 +27,8 @@ const (
 	digestLength                = 64
 	digestCapacity              = 256
 	defaultDigestCacheTTL       = time.Second
+	cacheNodeIdSize				= 6
+	cacheNodeLimit				= 8 // should be same as saturated kademlia table?
 )
 
 var (
@@ -89,9 +91,9 @@ type pssPayload struct {
 }
 
 // Pre-Whisper placeholder
-type pssCacheEntry struct {
+type pssCache struct {
 	expiresAt time.Time
-	receivedFrom []byte
+	sentTo [][cacheNodeIdSize]byte
 }
 
 // Topic defines the context of a message being transported over pss
@@ -121,7 +123,7 @@ type Pss struct {
 	//peerPool map[pot.Address]map[PssTopic]*PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
 	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter     // keep track of all virtual p2p.Peers we are currently speaking to
 	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
-	fwdcache map[pssDigest]pssCacheEntry                            // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
+	fwdcache map[pssDigest]pssCache                           // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
 	cachettl time.Duration                                      // how long to keep messages in fwdcache
 	hasher   func(string) storage.Hasher                        // hasher to digest message to cache
 	lock     sync.Mutex
@@ -148,60 +150,45 @@ func NewPss(k Overlay, params *PssParams) *Pss {
 		//peerPool: make(map[pot.Address]map[PssTopic]*PssReadWriter, PssPeerCapacity),
 		peerPool: make(map[pot.Address]map[PssTopic]p2p.MsgReadWriter, PssPeerCapacity),
 		handlers: make(map[PssTopic]func([]byte, *p2p.Peer, []byte) error),
-		fwdcache: make(map[pssDigest]pssCacheEntry),
+		fwdcache: make(map[pssDigest]pssCache),
 		cachettl: params.Cachettl,
 		hasher:   storage.MakeHashFunc,
 	}
 }
 
-// enables to set address of node, to avoid backwards forwarding
-//
-// currently not in use as forwarder address is not known in the handler function hooked to the pss dispatcher.
-// it is included as a courtesy to custom transport layers that may want to implement this
-func (self *Pss) AddToCache(addr []byte, msg *PssMsg) error {
-	digest := self.hashMsg(msg)
-	return self.addFwdCacheSender(addr, digest)
-}
-
-func (self *Pss) addFwdCacheSender(addr []byte, digest pssDigest) error {
+func (self *Pss) addCache(addr []byte, digest pssDigest) error {
 	self.lock.Lock()
 	defer self.lock.Unlock()
-	var entry pssCacheEntry
+	var cache pssCache
 	var ok bool
-	if entry, ok = self.fwdcache[digest]; !ok {
-		entry = pssCacheEntry{
+	if cache, ok = self.fwdcache[digest]; !ok {
+		cache = pssCache{
+			sentTo: make([][cacheNodeIdSize]byte, cacheNodeLimit),
 		}
-	}
-	entry.receivedFrom = addr
-	self.fwdcache[digest] = entry
+		
+	}	
+	cache.expiresAt = time.Now().Add(self.cachettl)
+	addrstub := [cacheNodeIdSize]byte{}
+	copy(addrstub[:], addr[:cacheNodeIdSize])
+	cache.sentTo = append(cache.sentTo, addrstub)
+	self.fwdcache[digest] = cache
 	return nil
 }
 
-func (self *Pss) addFwdCacheExpire(digest pssDigest) error {
-	self.lock.Lock()
-	defer self.lock.Unlock()
-	var entry pssCacheEntry
-	var ok bool
-	if entry, ok = self.fwdcache[digest]; !ok {
-		entry = pssCacheEntry{
-		}
-	}
-	entry.expiresAt = time.Now().Add(self.cachettl)
-	self.fwdcache[digest] = entry
-	return nil
-}
-
-func (self *Pss) checkFwdCache(addr []byte, digest pssDigest) bool {
+func (self *Pss) checkCache(addr []byte, digest pssDigest) bool {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	entry, ok := self.fwdcache[digest]
 	if ok {
-		if entry.expiresAt.After(time.Now()) {
-			log.Debug(fmt.Sprintf("unexpired cache for digest %x", digest))
-			return true
-		} else if entry.expiresAt.IsZero() && bytes.Equal(addr, entry.receivedFrom) {
-			log.Debug(fmt.Sprintf("sendermatch %x for digest %x", common.ByteLabel(addr), digest))
-			return true
+		if entry.expiresAt.Before(time.Now()) {
+			log.Trace(fmt.Sprintf("clearing expired cache for digest %x", digest))
+			return false
+		}
+		for _, addrstub := range entry.sentTo {
+			if bytes.Equal(addrstub[:], addr[:cacheNodeIdSize]) {
+				log.Trace(fmt.Sprintf("cache match addr %x (stub %x) digest %x", common.ByteLabel(addr), addrstub, digest))
+				return true
+			}
 		}
 	}
 	return false
@@ -297,12 +284,6 @@ func (self *Pss) Forward(msg *PssMsg) error {
 
 	digest := self.hashMsg(msg)
 
-	if self.checkFwdCache(nil, digest) {
-		log.Trace(fmt.Sprintf("pss relay block-cache match: FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient())))
-		//return errorBlockByCache
-		return nil
-	}
-
 	// TODO:check integrity of message
 
 	sent := false
@@ -310,22 +291,23 @@ func (self *Pss) Forward(msg *PssMsg) error {
 	// send with kademlia
 	// find the closest peer to the recipient and attempt to send
 	self.Overlay.EachLivePeer(msg.GetRecipient(), 256, func(p Peer, po int) bool {
-		if self.checkFwdCache(p.OverlayAddr(), digest) {
-			log.Warn(fmt.Sprintf("BOUNCE DEFER PSS-relay FROM %x TO %x THRU %x:", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
+		if self.checkCache(p.OverlayAddr(), digest) {
+			log.Trace(fmt.Sprintf("Skipping cached PSS-relayer FROM %x TO %x THRU %x:", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
 			return true
 		}
-		log.Warn(fmt.Sprintf("Attempting PSS-relay FROM %x TO %x THRU %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
+		log.Debug(fmt.Sprintf("Attempting PSS-relay FROM %x TO %x THRU %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
 		err := p.Send(msg)
 		if err != nil {
 			log.Warn(fmt.Sprintf("FAILED PSS-relay FROM %x TO %x THRU %x: %v", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr()), err))
 			return true
 		}
 		sent = true
-		self.addFwdCacheExpire(digest)
+		self.addCache(p.OverlayAddr(), digest)
 		return false
 	})
 	if !sent {
-		return fmt.Errorf("PSS Was not able to send to any peers")
+		log.Warn(fmt.Sprintf("PSS Was not able to forward to any peers FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient())))
+		//return fmt.Errorf("PSS Was not able to send to any peers")
 	}
 
 	return nil
