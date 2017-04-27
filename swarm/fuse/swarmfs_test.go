@@ -21,13 +21,14 @@ package fuse
 import (
 	"bytes"
 	"crypto/rand"
-	"github.com/ethereum/go-ethereum/swarm/api"
-	"github.com/ethereum/go-ethereum/swarm/storage"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/swarm/api"
+	"github.com/ethereum/go-ethereum/swarm/storage"
 )
 
 type fileInfo struct {
@@ -45,7 +46,7 @@ func testFuseFileSystem(t *testing.T, f func(*api.Api)) {
 	}
 	os.RemoveAll(datadir)
 
-	dpa, err := storage.NewLocalDPA(datadir)
+	dpa, err := storage.NewLocalDPA(datadir, storage.ZeroKey)
 	if err != nil {
 		return
 	}
