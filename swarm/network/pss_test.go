@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/swarm/services"
 )
 
 const (
@@ -27,8 +29,9 @@ const (
 )
 
 func init() {
-	h := log.CallerFileHandler(log.StreamHandler(os.Stderr, log.TerminalFormat(true)))
-	log.Root().SetHandler(h)
+	log.Root().SetHandler(log.LvlFilterHandler(log.LvlError, log.StreamHandler(os.Stderr, log.TerminalFormat(true))))
+	// 	h := log.CallerFileHandler(log.StreamHandler(os.Stderr, log.TerminalFormat(true)))
+	// 	log.Root().SetHandler(h)
 }
 
 // example protocol implementation peer
@@ -100,28 +103,17 @@ func (n *pssTestNode) UnderlayAddr() []byte {
 }
 
 // the content of the msgs we're sending in the tests
-type pssTestPayload struct {
-	Data string
-}
-
-func (m *pssTestPayload) String() string {
-	return m.Data
-}
+type pssTestPayload string
 
 type pssTestService struct {
-	node    *pssTestNode // get addrs from this
-	msgFunc func(interface{}) error
+	*services.MultiService
+	node *Pss
 }
 
-func newPssTestService(t *testing.T, handlefunc func(interface{}) error, testnode *pssTestNode) *pssTestService {
+func newPssTestService() *pssTestService {
 	hp := NewHiveParams()
-	//hp.CallInterval = 250
-	testnode.Hive = NewHive(hp, testnode.Pss.Overlay)
-	return &pssTestService{
-		//nid := adapters.NewNodeId(addr.UnderlayAddr())
-		msgFunc: handlefunc,
-		node:    testnode,
-	}
+	hive = NewHive(hp, to)
+	return service.NewMultiService()
 }
 
 func (self *pssTestService) Start(server p2p.Server) error {
@@ -154,30 +146,19 @@ func (self *pssTestService) Protocols() []p2p.Protocol {
 	return []p2p.Protocol{*proto}
 }
 
-func (self *pssTestService) APIs() []rpc.API {
-	return []rpc.API{
-		rpc.API{
-			Namespace: "eth",
-			Version:   "0.1/pss",
-			Service:   NewPssApi(self.node.Pss),
-			Public:    true,
-		},
-	}
-	return nil
-}
-
 func TestPssCache(t *testing.T) {
 	var err error
 	to, _ := hex.DecodeString("08090a0b0c0d0e0f1011121314150001020304050607161718191a1b1c1d1e1f")
 	oaddr, _ := hex.DecodeString("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
 	uaddr, _ := hex.DecodeString("101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f")
-	ps := makePss(oaddr)
+	ps := newtestPss(oaddr)
 	pp := NewPssParams()
-	topic, _ := MakeTopic(protocolName, protocolVersion)
+	topic := NewTopic(protocolName, protocolVersion)
 	data := []byte("foo")
 	fwdaddr := RandomAddr()
 	msg := &PssMsg{
-		Payload: pssEnvelope{
+		To: to,
+		Payload: PssEnvelope{
 			TTL:         0,
 			SenderOAddr: oaddr,
 			SenderUAddr: uaddr,
@@ -185,10 +166,10 @@ func TestPssCache(t *testing.T) {
 			Payload:     data,
 		},
 	}
-	msg.SetRecipient(to)
 
 	msgtwo := &PssMsg{
-		Payload: pssEnvelope{
+		To: to,
+		Payload: PssEnvelope{
 			TTL:         0,
 			SenderOAddr: uaddr,
 			SenderUAddr: oaddr,
@@ -196,7 +177,6 @@ func TestPssCache(t *testing.T) {
 			Payload:     data,
 		},
 	}
-	msgtwo.SetRecipient(to)
 
 	digest := ps.hashMsg(msg)
 	digesttwo := ps.hashMsg(msgtwo)
@@ -253,21 +233,48 @@ func TestPssCache(t *testing.T) {
 }
 
 func TestPssRegisterHandler(t *testing.T) {
-	var topic PssTopic
-	var err error
 	addr := RandomAddr()
-	ps := makePss(addr.UnderlayAddr())
-
-	topic, _ = MakeTopic(protocolName, protocolVersion)
-	err = ps.Register(topic, func(msg []byte, p *p2p.Peer, sender []byte) error { return nil })
-	if err != nil {
-		t.Fatalf("couldnt register protocol 'foo' v 42: %v", err)
+	ps := newTestPss(addr.UnderlayAddr())
+	from := RandomAddr()
+	payload := []byte("payload")
+	topic := NewTopic(protocolName, protocolVersion)
+	checkMsg := func(msg []byte, p *p2p.Peer, sender []byte) error {
+		if !bytes.Equal(from.OverlayAddr(), sender) {
+			return fmt.Errorf("sender mismatch. expected %x, got %x", from.OverlayAddr(), sender)
+		}
+		if !bytes.Equal(msg, payload) {
+			return fmt.Errorf("sender mismatch. expected %x, got %x", msg, payload)
+		}
+		if !bytes.Equal(from.UnderlayAddr(), p.ID()) {
+			return fmt.Errorf("sender mismatch. expected %x, got %x", from.UnderlayAddr(), p.ID())
+		}
 	}
-
-	topic, _ = MakeTopic(protocolName, protocolVersion)
-	err = ps.Register(topic, func(msg []byte, p *p2p.Peer, sender []byte) error { return nil })
-	if err == nil {
-		t.Fatalf("register protocol 'abc..789' v 65536 should have failed")
+	deregister := ps.Register(topic, checkMsg)
+	pssmsg := &PssMsg{Data: NewPssEnvelope(from, topic, payload)}
+	err = ps.Process(pssmsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var i int
+	err = ps.Process(&PssMsg{Data: NewPssEnvelope(from, []byte("topic"), payload)})
+	expErr := ""
+	if err == nil || err.Error() != expErr {
+		t.Fatalf("unhandled topic expected %v, got %v", expErr, err)
+	}
+	deregister2 := ps.Register(topic, func(msg []byte, p *p2p.Peer, sender []byte) error { i++; return nil })
+	ps.Process(pssmsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i != 1 {
+		t.Fatalf("second registerer handler did not run")
+	}
+	deregister()
+	deregister2()
+	err = ps.Process(&PssMsg{Data: NewPssEnvelope(from, topic, payload)})
+	expErr = ""
+	if err == nil || err.Error() != expErr {
+		t.Fatalf("reregister handler expected %v, got %v", expErr, err)
 	}
 }
 
@@ -319,7 +326,7 @@ func testPssFullRandom(t *testing.T, numsends int, numnodes int, numfullnodes in
 	expectnodesresults := make(map[*adapters.NodeId][]int) // which messages expect actually got
 
 	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &pssTestPayload{})
-	topic, _ := MakeTopic(protocolName, protocolVersion)
+	topic, _ := NewTopic(protocolName, protocolVersion)
 
 	trigger := make(chan *adapters.NodeId)
 	net := simulations.NewNetwork(&simulations.NetworkConfig{
@@ -422,7 +429,7 @@ func testPssFullRandom(t *testing.T, numsends int, numnodes int, numfullnodes in
 		code, _ := vct.GetCode(&pssTestPayload{})
 
 		for i := 0; i < len(sends); i += 2 {
-			msgbytes, _ := makeMsg(code, &pssTestPayload{
+			msgbytes, _ := newProtocolMsg(code, &pssTestPayload{
 				Data: fmt.Sprintf("%v", i+1),
 			})
 			go func(i int, expectnodesresults map[*adapters.NodeId][]int) {
@@ -518,18 +525,8 @@ func testPssFullRandom(t *testing.T, numsends int, numnodes int, numfullnodes in
 
 func TestPssFullLinearEcho(t *testing.T) {
 
-	var action func(ctx context.Context) error
-	var check func(ctx context.Context, id *adapters.NodeId) (bool, error)
-	var ctx context.Context
-	var result *simulations.StepResult
-	var timeout time.Duration
-	var cancel context.CancelFunc
-
-	var firstpssnode *adapters.NodeId
-	var secondpssnode *adapters.NodeId
-
 	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &pssTestPayload{})
-	topic, _ := MakeTopic(protocolName, protocolVersion)
+	topic := NewTopic(protocolName, protocolVersion)
 
 	fullnodes := []*adapters.NodeId{}
 	trigger := make(chan *adapters.NodeId)
@@ -537,11 +534,12 @@ func TestPssFullLinearEcho(t *testing.T) {
 		Id:      "0",
 		Backend: true,
 	})
+
 	testpeers := make(map[*adapters.NodeId]*pssTestPeer)
 	nodes := newPssSimulationTester(t, 3, 2, net, trigger, vct, protocolName, protocolVersion, testpeers)
 	ids := []*adapters.NodeId{} // ohh risky! but the action for a specific id should come before the expect anyway
 
-	action = func(ctx context.Context) error {
+	action := func(ctx context.Context) error {
 		var thinnodeid *adapters.NodeId
 		for id, _ := range nodes {
 			ids = append(ids, id)
@@ -649,9 +647,7 @@ func TestPssFullLinearEcho(t *testing.T) {
 
 	action = func(ctx context.Context) error {
 		code, _ := vct.GetCode(&pssTestPayload{})
-		msgbytes, _ := makeMsg(code, &pssTestPayload{
-			Data: "ping",
-		})
+		msgbytes, _ := newProtocolMsg(code, "ping")
 
 		go func() {
 			oaddr := nodes[secondpssnode].OverlayAddr()
@@ -664,6 +660,7 @@ func TestPssFullLinearEcho(t *testing.T) {
 
 		return nil
 	}
+
 	check = func(ctx context.Context, id *adapters.NodeId) (bool, error) {
 		select {
 		case <-ctx.Done():
@@ -712,9 +709,9 @@ func TestPssFullWS(t *testing.T) {
 	var cancel context.CancelFunc
 
 	var firstpssnode, secondpssnode *adapters.NodeId
-	fullnodes := []*adapters.NodeId{}
+	var fullnodes []*adapters.NodeId
 	vct := protocols.NewCodeMap(protocolName, protocolVersion, 65535, &pssTestPayload{})
-	topic, _ := MakeTopic(pingTopicName, pingTopicVersion)
+	topic := NewTopic(pingTopicName, pingTopicVersion)
 
 	trigger := make(chan *adapters.NodeId)
 	simnet := simulations.NewNetwork(&simulations.NetworkConfig{
@@ -936,7 +933,7 @@ func TestPssFullWS(t *testing.T) {
 // the simulation tester constructor is currently a hack to fit previous code with later stack using node.Services to start SimNodes
 
 func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, simnet *simulations.Network, trigger chan *adapters.NodeId, vct *protocols.CodeMap, name string, version int, testpeers map[*adapters.NodeId]*pssTestPeer) map[*adapters.NodeId]*pssTestNode {
-	topic, _ := MakeTopic(name, version)
+	topic, _ := NewTopic(name, version)
 	nodes := make(map[*adapters.NodeId]*pssTestNode, numnodes)
 	psss := make(map[*adapters.NodeId]*Pss)
 	simnet.SetNaf(func(conf *simulations.NodeConfig) adapters.NodeAdapter {
@@ -959,10 +956,10 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, simnet
 		addr := NewPeerAddrFromNodeId(conf.Id)
 
 		if testpeers[conf.Id] != nil {
-			handlefunc = makePssHandleProtocol(psss[conf.Id])
+			handlefunc = newtestPssHandleProtocol(psss[conf.Id])
 			log.Trace(fmt.Sprintf("Making full protocol id %x addr %x (testpeers %p)", common.ByteLabel(conf.Id.Bytes()), common.ByteLabel(addr.OverlayAddr()), testpeers))
 		} else {
-			handlefunc = makePssHandleForward(psss[conf.Id])
+			handlefunc = newtestPssHandleForward(psss[conf.Id])
 		}
 
 		// protocols are now registered by invoking node services
@@ -986,7 +983,7 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, simnet
 	}
 	for i, conf := range configs {
 		addr := NewPeerAddrFromNodeId(conf.Id)
-		psss[conf.Id] = makePss(addr.OverlayAddr())
+		psss[conf.Id] = newtestPss(addr.OverlayAddr())
 		if i < numfullnodes {
 			tp := &pssTestPeer{
 				Peer: &protocols.Peer{
@@ -996,7 +993,7 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, simnet
 				resultC:  make(chan int),
 			}
 			testpeers[conf.Id] = tp
-			targetprotocol := makeCustomProtocol(name, version, vct, testpeers[conf.Id])
+			targetprotocol := newCustomProtocol(name, version, vct, testpeers[conf.Id])
 			pssprotocol := NewPssProtocol(psss[conf.Id], &topic, vct, targetprotocol)
 			psss[conf.Id].Register(topic, pssprotocol.GetHandler())
 		}
@@ -1010,7 +1007,7 @@ func newPssSimulationTester(t *testing.T, numnodes int, numfullnodes int, simnet
 	return nodes
 }
 
-func makePss(addr []byte) *Pss {
+func newtestPss(addr []byte) *Pss {
 	kp := NewKadParams()
 	kp.MinProxBinSize = 3
 
@@ -1022,7 +1019,7 @@ func makePss(addr []byte) *Pss {
 	return ps
 }
 
-func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, testpeer *pssTestPeer) *p2p.Protocol {
+func newCustomProtocol(name string, version int, ct *protocols.CodeMap, testpeer *pssTestPeer) *p2p.Protocol {
 	run := func(p *protocols.Peer) error {
 		log.Trace(fmt.Sprintf("running pss vprotocol on peer %v", p))
 		if testpeer == nil {
@@ -1037,36 +1034,16 @@ func makeCustomProtocol(name string, version int, ct *protocols.CodeMap, testpee
 	return protocols.NewProtocol(name, uint(version), run, ct, nil, nil)
 }
 
-func makeFakeMsg(ps *Pss, ct *protocols.CodeMap, topic PssTopic, senderaddr PeerAddr, content string) PssMsg {
-	data := pssTestPayload{}
-	code, found := ct.GetCode(&data)
-	if !found {
-		return PssMsg{}
+func NewPssMsg(topic PssTopic, sender PeerAddr, recipient []byte, code int, payload string) *PssMsg {
+	payload := newProtocolMessage(code, data)
+	pssenv := NewPssEnvelope(topic, sender, payload)
+	return &PssMsg{
+		Recipient: recipient,
+		Payload:   pssenv,
 	}
-
-	data.Data = content
-
-	rlpbundle, err := makeMsg(code, data)
-	if err != nil {
-		return PssMsg{}
-	}
-
-	pssenv := pssEnvelope{
-		SenderOAddr: senderaddr.OverlayAddr(),
-		SenderUAddr: senderaddr.UnderlayAddr(),
-		Topic:       topic,
-		TTL:         DefaultTTL,
-		Payload:     rlpbundle,
-	}
-	pssmsg := PssMsg{
-		Payload: pssenv,
-	}
-	pssmsg.SetRecipient(ps.Overlay.GetAddr().OverlayAddr())
-
-	return pssmsg
 }
 
-func makePssHandleForward(ps *Pss) func(msg interface{}) error {
+func newtestPssHandleForward(ps *Pss) func(msg interface{}) error {
 	// for the simple check it passes on the message if it's not for us
 	return func(msg interface{}) error {
 		pssmsg := msg.(*PssMsg)
@@ -1080,24 +1057,12 @@ func makePssHandleForward(ps *Pss) func(msg interface{}) error {
 	}
 }
 
-func makePssHandleProtocol(ps *Pss) func(msg interface{}) error {
-	return func(msg interface{}) error {
-		pssmsg := msg.(*PssMsg)
-
-		if ps.IsSelfRecipient(pssmsg) {
-			log.Trace("pss for us ... let's process!")
-			env := pssmsg.Payload
-			umsg := env.Payload // this will be rlp encrypted
-			f := ps.GetHandler(env.Topic)
-			if f == nil {
-				return fmt.Errorf("No registered handler for topic '%s'", env.Topic)
-			}
-			nid := adapters.NewNodeId(env.SenderUAddr)
-			p := p2p.NewPeer(nid.NodeID, fmt.Sprintf("%x", common.ByteLabel(nid.Bytes())), []p2p.Cap{})
-			return f(umsg, p, env.SenderOAddr)
-		} else {
-			log.Trace("pss was for someone else :'(")
-			return ps.Forward(pssmsg)
+func newPingHandler(ps *Pss) func([]byte, *p2p.Peer, []byte) error {
+	pingtopic := NewTopic(pingTopicName, pingTopicVersion)
+	return func(msg []byte, p *p2p.Peer, from []byte) error {
+		if bytes.Equal([]byte("ping"), msg) {
+			log.Trace(fmt.Sprintf("swarm pss ping from %x sending pong", common.ByteLabel(from)))
+			ps.Send(from, pingtopic, []byte("pong"))
 		}
 		return nil
 	}

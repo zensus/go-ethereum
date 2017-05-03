@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/pot"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/storage"
 )
 
@@ -30,6 +30,7 @@ const (
 	defaultDigestCacheTTL       = time.Second
 	pingTopicName               = "pss"
 	pingTopicVersion            = 1
+	pssCodeOffset               = 20
 )
 
 var (
@@ -51,50 +52,14 @@ func NewPssParams() *PssParams {
 }
 
 // Encapsulates the message transported over pss.
-//
-// Warning: do not access the To-member directly. Use *PssMsg.GetRecipient() and *PssMsg.SetRecipient() instead.
 type PssMsg struct {
-	// (we need the To-member exported for type inference)
 	To      []byte
-	Payload pssEnvelope
-}
-
-// Retrieve the remote peer receipient address of the message
-func (self *PssMsg) GetRecipient() []byte {
-	return self.To
-}
-
-// Set the remote peer recipient address of the message
-func (self *PssMsg) SetRecipient(to []byte) {
-	self.To = to
+	Payload *PssEnvelope
 }
 
 // String representation of PssMsg
 func (self *PssMsg) String() string {
-	return fmt.Sprintf("PssMsg: Recipient: %x", common.ByteLabel(self.GetRecipient()))
-}
-
-// Pre-Whisper placeholder
-type pssEnvelope struct {
-	Topic       PssTopic
-	TTL         uint16
-	Payload     []byte
-	SenderOAddr []byte
-	SenderUAddr []byte
-}
-
-// Pre-Whisper placeholder
-type pssPayload struct {
-	Code       uint64
-	Size       uint32
-	Data       []byte
-	ReceivedAt time.Time
-}
-
-// Pre-Whisper placeholder
-type pssCacheEntry struct {
-	expiresAt    time.Time
-	receivedFrom []byte
+	return fmt.Sprintf("PssMsg: Recipient: %x", common.ByteLabel(self.To))
 }
 
 // Topic defines the context of a message being transported over pss
@@ -102,14 +67,47 @@ type pssCacheEntry struct {
 // Typically, one can map protocol handlers for the message payloads by mapping topic to them; see *Pss.Register()
 type PssTopic [TopicLength]byte
 
-// Pre-Whisper placeholder
+// Pre-Whisper placeholder, payload of PssMsg
+type PssEnvelope struct {
+	Topic       PssTopic
+	TTL         uint16
+	Payload     []byte
+	SenderOAddr []byte
+	SenderUAddr []byte
+}
+
+// creates Pss envelope from sender address, topic and raw payload
+func NewPssEnvelope(addr PeerAddr, topic PssTopic, payload []byte) *PssEnvelope {
+	return &pssEnvelope{
+		SenderOAddr: addr.OverlayAddr(),
+		SenderUAddr: addr.UnderlayAddr(),
+		Topic:       topic,
+		TTL:         DefaultTTL,
+		Payload:     payload,
+	}
+}
+
+// encapsulates a protocol msg as PssEnvelope data
+type PssProtocolMsg struct {
+	Code       uint64
+	Size       uint32
+	Data       []byte
+	ReceivedAt time.Time
+}
+
+type pssCacheEntry struct {
+	expiresAt    time.Time
+	receivedFrom []byte
+}
+
 type pssDigest uint32
+
+// Message handler func for a topic
+type pssHandler func(msg []byte, p *p2p.Peer, from []byte) error
 
 // pss provides sending messages to nodes without having to be directly connected to them.
 //
 // The messages are wrapped in a PssMsg structure and routed using the swarm kademlia routing.
-// The structure is used by normal incoming message handlers on the nodes to determine which action to take, forward or process.
-// Thus it is up to the implementer to write a handler, and link the PssMsg to this appropriate handler.
 //
 // The top-level Pss object provides:
 //
@@ -120,21 +118,19 @@ type pssDigest uint32
 // - a dispatcher lookup, mapping protocols to topics
 // - a message cache to spot messages that previously have been forwarded
 type Pss struct {
-	Overlay // we can get the overlayaddress from this
-	//peerPool map[pot.Address]map[PssTopic]*PssReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
-	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter     // keep track of all virtual p2p.Peers we are currently speaking to
-	handlers map[PssTopic]func([]byte, *p2p.Peer, []byte) error // topic and version based pss payload handlers
-	events   map[PssTopic]*event.Feed                           // subscriptions for each topic
-	fwdcache map[pssDigest]pssCacheEntry                        // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
-	cachettl time.Duration                                      // how long to keep messages in fwdcache
-	hasher   func(string) storage.Hasher                        // hasher to digest message to cache
+	Overlay                                                 // we can get the overlayaddress from this
+	peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
+	handlers map[PssTopic]map[*pssHandler]bool              // topic and version based pss payload handlers
+	fwdcache map[pssDigest]pssCacheEntry                    // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
+	cachettl time.Duration                                  // how long to keep messages in fwdcache
+	hasher   func(string) storage.Hasher                    // hasher to digest message to cache
 	lock     sync.Mutex
 }
 
 func (self *Pss) hashMsg(msg *PssMsg) pssDigest {
 	hasher := self.hasher("SHA3")()
 	hasher.Reset()
-	hasher.Write(msg.GetRecipient())
+	hasher.Write(msg.To)
 	hasher.Write(msg.Payload.SenderUAddr)
 	hasher.Write(msg.Payload.SenderOAddr)
 	hasher.Write(msg.Payload.Topic[:])
@@ -145,27 +141,58 @@ func (self *Pss) hashMsg(msg *PssMsg) pssDigest {
 
 // Creates a new Pss instance. A node should only need one of these
 //
-// TODO error check overlay integrity
+// TODO: error check overlay integrity
 func NewPss(k Overlay, params *PssParams) *Pss {
 	return &Pss{
 		Overlay: k,
 		//peerPool: make(map[pot.Address]map[PssTopic]*PssReadWriter, PssPeerCapacity),
 		peerPool: make(map[pot.Address]map[PssTopic]p2p.MsgReadWriter, PssPeerCapacity),
-		handlers: make(map[PssTopic]func([]byte, *p2p.Peer, []byte) error),
-		events:   make(map[PssTopic]*event.Feed),
+		handlers: make(map[PssTopic]map[*pssHandler]bool),
 		fwdcache: make(map[pssDigest]pssCacheEntry),
 		cachettl: params.Cachettl,
 		hasher:   storage.MakeHashFunc,
 	}
 }
 
-// enables to set address of node, to avoid backwards forwarding
-//
-// currently not in use as forwarder address is not known in the handler function hooked to the pss dispatcher.
-// it is included as a courtesy to custom transport layers that may want to implement this
-func (self *Pss) AddToCache(addr []byte, msg *PssMsg) error {
-	digest := self.hashMsg(msg)
-	return self.addFwdCacheSender(addr, digest)
+// implements the ProtocolService interface
+func (self *Pss) RegisterMsgTypes(ct *protocols.CodeMap) {
+	ct.Register(pssCodeOffset, &PssMsg{})
+}
+
+// the protocol module service to run on a peer
+// implements the ProtocolService interface
+func (self *Pss) ProtocolRun(p interface{}) error {
+	p.(Peer).Register(&PssMsg{}, self.handlePssMsg)
+	return nil
+}
+
+// Takes the generated PssTopic of a protocol/chatroom etc, and links a handler function to it
+// This allows the implementer to retrieve the right handler functions (invoke the right protocol)
+// for an incoming message by inspecting the topic on it.
+// a topic allows for multiple handlers
+// returns a deregister function which needs to be called to deregister the handler
+// (similar to event.Subscription.Unsubscribe())
+func (self *Pss) Register(topic PssTopic, handler pssHandler) func() {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	handlers := self.handlers[topic]
+	if handlers == nil {
+		handlers = make(map[*pssHandler]bool)
+		self.handlers[topic] = handlers
+	}
+	handlers[&handler] = true
+	return func() { self.deregister(topic, &handler) }
+}
+
+func (self *Pss) deregister(topic PssTopic, h *pssHandler) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	handlers := self.handlers[topic]
+	if len(handlers) == 1 {
+		delete(self.handlers, topic)
+		return
+	}
+	delete(handlers, h)
 }
 
 func (self *Pss) addFwdCacheSender(addr []byte, digest pssDigest) error {
@@ -210,33 +237,114 @@ func (self *Pss) checkFwdCache(addr []byte, digest pssDigest) bool {
 	return false
 }
 
-// Takes the generated PssTopic of a protocol, and links a handler function to it
-// This allows the implementer to retrieve the right handler function (invoke the right protocol) for an incoming message by inspecting the topic on it.
-func (self *Pss) Register(topic PssTopic, handler func(msg []byte, p *p2p.Peer, from []byte) error) error {
-	self.lock.Lock()
-	defer self.lock.Unlock()
-	self.handlers[topic] = func(msg []byte, p *p2p.Peer, from []byte) error {
-		self.alertSubscribers(&topic, msg)
-		return handler(msg, p, from)
+func (self *Pss) API() *rpc.API {
+	return &rpc.API{
+		Namespace: "eth",
+		Version:   "0.1/pss",
+		Service:   NewPssAPI(self),
+		Public:    true,
 	}
-	self.registerFeed(topic)
-	return nil
 }
 
-func (self *Pss) Subscribe(topic *PssTopic, ch chan []byte) (event.Subscription, error) {
-	_, ok := self.events[*topic]
-	if !ok {
-		return nil, fmt.Errorf("No feed registered for topic %v", topic)
-	}
-	sub := self.events[*topic].Subscribe(ch)
-	log.Trace("new pss subscribe", "topic", topic, "sub", sub)
-	return sub, nil
-}
-
-func (self *Pss) GetHandler(topic PssTopic) func([]byte, *p2p.Peer, []byte) error {
+func (self *Pss) getHandlers(topic PssTopic) map[*pssHandler]bool {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	return self.handlers[topic]
+}
+
+//
+func (self *Pss) handlePssMsg(msg interface{}) error {
+	pssmsg := msg.(*PssMsg)
+
+	if !self.isSelfRecipient(pssmsg) {
+		log.Trace("pss was for someone else :'( ... forwarding")
+		return self.Forward(pssmsg)
+	}
+	log.Trace("pss for us, yay! ... let's process!")
+	return self.Process(pssmsg)
+}
+
+// processes a message with self as recipient
+func (self *Pss) Process(pssmsg *PssMsg) error {
+	env := pssmsg.Payload
+	payload := env.Payload
+	handlers := self.getHandlers(env.Topic)
+	if len(handlers) == 0 {
+		return fmt.Errorf("No registered handler for topic '%s'", env.Topic)
+	}
+	nid := adapters.NewNodeId(env.SenderUAddr)
+	p := p2p.NewPeer(nid.NodeID, fmt.Sprintf("%x", common.ByteLabel(nid.Bytes())), []p2p.Cap{})
+	for f := range handlers {
+		err := (*f)(payload, p, env.SenderOAddr)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Sends a message using pss. The message could be anything at all, and will be handled by whichever handler function is mapped to PssTopic using *Pss.Register()
+//
+// The to address is a swarm overlay address
+func (self *Pss) Send(to []byte, topic PssTopic, msg []byte) error {
+	sender := self.Overlay.GetAddr()
+	pssenv := NewPssEnvelope(sender, topic, msg)
+	pssmsg := &PssMsg{
+		To:      to,
+		Payload: pssenv,
+	}
+	return self.Forward(pssmsg)
+}
+
+// Forwards a pss message to the peer(s) closest to the to address
+//
+// Handlers that want to pass on a message should call this directly
+func (self *Pss) Forward(msg *PssMsg) error {
+
+	if self.isSelfRecipient(msg) {
+		return errorForwardToSelf
+	}
+
+	digest := self.hashMsg(msg)
+
+	if self.checkFwdCache(nil, digest) {
+		log.Trace(fmt.Sprintf("QROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.To)))
+		return nil
+	}
+
+	// TODO:check integrity of message
+	sent := 0
+
+	// send with kademlia
+	// find the closest peer to the recipient and attempt to send
+	self.Overlay.EachLivePeer(msg.To, 256, func(p Peer, po int, isproxbin bool) bool {
+		addr := self.Overlay.GetAddr()
+		sendMsg := fmt.Sprintf("%x: msg to %x via %x", common.ByteLabel(addr.OverlayAddr()), common.ByteLabel(msg.To), common.ByteLabel(p.OverlayAddr()))
+		if self.checkFwdCache(p.OverlayAddr(), digest) {
+			log.Info(fmt.Sprintf("%v: peer already forwarded to", sendMsg))
+			return true
+		}
+		err := p.Send(msg)
+		if err != nil {
+			log.Warn(fmt.Sprintf("%v: failed forwarding: %v", sendMsg, err))
+			return true
+		}
+		log.Trace(fmt.Sprintf("%v: successfully forwarded", sendMsg))
+		sent++
+		// if equality holds, p is always the first peer given in the iterator
+		if bytes.Equal(msg.To, p.OverlayAddr()) || !isproxbin {
+			return false
+		}
+		log.Trace(fmt.Sprintf("%x is in proxbin, keep forwarding", common.ByteLabel(p.OverlayAddr())))
+		return true
+	})
+
+	if sent == 0 {
+		return fmt.Errorf("PSS: unable to forward to any peers")
+	}
+
+	self.addFwdCacheExpire(digest)
+	return nil
 }
 
 // Links a pss peer address and topic to a dedicated p2p.MsgReadWriter in the pss peerpool, and runs the specificed protocol on this p2p.MsgReadWriter and the specified peer
@@ -249,6 +357,7 @@ func (self *Pss) AddPeer(p *p2p.Peer, addr pot.Address, protocall adapters.Proto
 	go func() {
 		err := protocall(p, rw)
 		log.Warn(fmt.Sprintf("pss vprotocol quit on addr %v topic %v: %v", addr, topic, err))
+		self.removePeerTopic(rw.To, topic)
 	}()
 	return nil
 }
@@ -270,100 +379,11 @@ func (self *Pss) addPeerTopic(id pot.Address, topic PssTopic, rw p2p.MsgReadWrit
 }
 
 func (self *Pss) removePeerTopic(id pot.Address, topic PssTopic) {
-	self.peerPool[id][topic] = nil
-	return
+	delete(self.peerPool[id], topic)
 }
 
 func (self *Pss) isActive(id pot.Address, topic PssTopic) bool {
-	if self.peerPool[id][topic] == nil {
-		return false
-	}
-	return true
-}
-
-func (self *Pss) registerFeed(topic PssTopic) {
-	self.events[topic] = &event.Feed{}
-}
-
-func (self *Pss) alertSubscribers(topic *PssTopic, msg []byte) error {
-	feed, ok := self.events[*topic]
-	if !ok {
-		return fmt.Errorf("No subscriptions registered for topic %v", topic)
-	}
-	numsent := feed.Send(msg)
-	log.Trace(fmt.Sprintf("pss sent to %d subscribers", numsent))
-	return nil
-}
-
-// Sends a message using pss. The message could be anything at all, and will be handled by whichever handler function is mapped to PssTopic using *Pss.Register()
-//
-// The to address is a swarm overlay address
-func (self *Pss) Send(to []byte, topic PssTopic, msg []byte) error {
-
-	pssenv := pssEnvelope{
-		SenderOAddr: self.Overlay.GetAddr().OverlayAddr(),
-		SenderUAddr: self.Overlay.GetAddr().UnderlayAddr(),
-		Topic:       topic,
-		TTL:         DefaultTTL,
-		Payload:     msg,
-	}
-
-	pssmsg := &PssMsg{
-		Payload: pssenv,
-	}
-	pssmsg.SetRecipient(to)
-
-	return self.Forward(pssmsg)
-}
-
-// Forwards a pss message to the peer(s) closest to the to address
-//
-// Handlers that want to pass on a message should call this directly
-func (self *Pss) Forward(msg *PssMsg) error {
-
-	if self.IsSelfRecipient(msg) {
-		return errorForwardToSelf
-	}
-
-	digest := self.hashMsg(msg)
-
-	if self.checkFwdCache(nil, digest) {
-		log.Trace(fmt.Sprintf("pss relay block-cache match: FROM %x TO %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient())))
-		//return errorBlockByCache
-		return nil
-	}
-
-	// TODO:check integrity of message
-
-	sent := 0
-
-	// send with kademlia
-	// find the closest peer to the recipient and attempt to send
-	self.Overlay.EachLivePeer(msg.GetRecipient(), 256, func(p Peer, po int, isproxbin bool) bool {
-		if self.checkFwdCache(p.OverlayAddr(), digest) {
-			log.Warn(fmt.Sprintf("BOUNCE DEFER PSS-relay FROM %x TO %x THRU %x:", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
-			return true
-		}
-		log.Warn(fmt.Sprintf("Attempting PSS-relay FROM %x TO %x THRU %x", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr())))
-		err := p.Send(msg)
-		if err != nil {
-			log.Warn(fmt.Sprintf("FAILED PSS-relay FROM %x TO %x THRU %x: %v", common.ByteLabel(self.Overlay.GetAddr().OverlayAddr()), common.ByteLabel(msg.GetRecipient()), common.ByteLabel(p.OverlayAddr()), err))
-			return true
-		}
-		sent++
-		if bytes.Equal(msg.GetRecipient(), p.OverlayAddr()) || !isproxbin {
-			return false
-		}
-		log.Trace(fmt.Sprintf("%x is in proxbin, so we continue sending", common.ByteLabel(p.OverlayAddr())))
-		return true
-	})
-	if sent == 0 {
-		return fmt.Errorf("PSS Was not able to send to any peers")
-	} else {
-		self.addFwdCacheExpire(digest)
-	}
-
-	return nil
+	return self.peerPool[id][topic] != nil
 }
 
 // Convenience object that:
@@ -374,19 +394,17 @@ func (self *Pss) Forward(msg *PssMsg) error {
 // Implements p2p.MsgReadWriter
 type PssReadWriter struct {
 	*Pss
-	RecipientOAddr pot.Address
-	LastActive     time.Time
-	rw             chan p2p.Msg
-	ct             *protocols.CodeMap
-	topic          *PssTopic
+	To         pot.Address
+	LastActive time.Time
+	rw         chan p2p.Msg
+	ct         *protocols.CodeMap
+	topic      *PssTopic
 }
 
 // Implements p2p.MsgReader
 func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
 	msg := <-prw.rw
-
 	log.Trace(fmt.Sprintf("pssrw readmsg: %v", msg))
-
 	return msg, nil
 }
 
@@ -399,11 +417,11 @@ func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 	}
 	msg.Decode(ifc)
 
-	to := prw.RecipientOAddr.Bytes()
-
-	pmsg, _ := makeMsg(msg.Code, ifc)
-
-	return prw.Pss.Send(to, *prw.topic, pmsg)
+	pmsg, err := newProtocolMessage(msg.Code, ifc)
+	if err != nil {
+		return err
+	}
+	return prw.Pss.Send(prw.To.Bytes(), *prw.topic, pmsg)
 }
 
 // Injects a p2p.Msg into the MsgReadWriter, so that it appears on the associated p2p.MsgReader
@@ -416,44 +434,38 @@ func (prw PssReadWriter) injectMsg(msg p2p.Msg) error {
 // Convenience object for passing messages in and out of the p2p layer
 type PssProtocol struct {
 	*Pss
-	virtualProtocol *p2p.Protocol
-	topic           *PssTopic
-	ct              *protocols.CodeMap
+	proto *p2p.Protocol
+	topic *PssTopic
+	ct    *protocols.CodeMap
 }
 
 // Constructor
-func NewPssProtocol(pss *Pss, topic *PssTopic, ct *protocols.CodeMap, targetprotocol *p2p.Protocol) *PssProtocol {
-	pp := &PssProtocol{
-		Pss:             pss,
-		virtualProtocol: targetprotocol,
-		topic:           topic,
-		ct:              ct,
+func NewPssProtocol(pss *Pss, topic *PssTopic, ct *protocols.CodeMap, proto *p2p.Protocol) *PssProtocol {
+	return &PssProtocol{
+		Pss:   pss,
+		proto: proto,
+		topic: topic,
+		ct:    ct,
 	}
-	return pp
-}
-
-// Retrieves a convenience method for passing an incoming message into the p2p layer
-//
-// If the implementer wishes to use the p2p.Protocol (or p2p/protocols) message handling, this handler can be directly registered as a handler for the PssMsg structure
-func (self *PssProtocol) GetHandler() func([]byte, *p2p.Peer, []byte) error {
-	return self.handle
 }
 
 func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) error {
 	hashoaddr := pot.NewHashAddressFromBytes(senderAddr).Address
 	if !self.isActive(hashoaddr, *self.topic) {
 		rw := &PssReadWriter{
-			Pss:            self.Pss,
-			RecipientOAddr: hashoaddr,
-			rw:             make(chan p2p.Msg),
-			ct:             self.ct,
-			topic:          self.topic,
+			Pss:   self.Pss,
+			To:    hashoaddr,
+			rw:    make(chan p2p.Msg),
+			ct:    self.ct,
+			topic: self.topic,
 		}
-		self.Pss.AddPeer(p, hashoaddr, self.virtualProtocol.Run, *self.topic, rw)
+		self.Pss.AddPeer(p, hashoaddr, self.proto.Run, *self.topic, rw)
 	}
 
 	payload := &pssPayload{}
-	rlp.DecodeBytes(msg, payload)
+	if err := rlp.DecodeBytes(msg, payload); err != nil {
+		return fmt.Errorf("pss protocol handler unable to decode payload as p2p message: %v", err)
+	}
 
 	pmsg := p2p.Msg{
 		Code:       payload.Code,
@@ -468,26 +480,11 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 	return nil
 }
 
-func (self *Pss) IsSelfRecipient(msg *PssMsg) bool {
-	if bytes.Equal(msg.GetRecipient(), self.Overlay.GetAddr().OverlayAddr()) {
-		return true
-	}
-	return false
+func (self *Pss) isSelfRecipient(msg *PssMsg) bool {
+	return bytes.Equal(msg.To, self.Overlay.GetAddr().OverlayAddr())
 }
 
-func (self *Pss) GetPingHandler() func([]byte, *p2p.Peer, []byte) error {
-	pingtopic, _ := MakeTopic(pingTopicName, pingTopicVersion)
-	return func(msg []byte, p *p2p.Peer, from []byte) error {
-		if bytes.Equal([]byte("ping"), msg) {
-			log.Trace(fmt.Sprintf("swarm pss ping from %x sending pong", common.ByteLabel(from)))
-			self.Send(from, pingtopic, []byte("pong"))
-		}
-		return nil
-	}
-}
-
-// Pre-Whisper placeholder
-func makeMsg(code uint64, msg interface{}) ([]byte, error) {
+func newProtocolMsg(code uint64, msg interface{}) ([]byte, error) {
 
 	rlpdata, err := rlp.EncodeToBytes(msg)
 	if err != nil {
@@ -503,24 +500,17 @@ func makeMsg(code uint64, msg interface{}) ([]byte, error) {
 		Data: rlpdata,
 	}
 
-	rlpbundle, err := rlp.EncodeToBytes(smsg)
-	if err != nil {
-		return nil, err
-	}
-
-	return rlpbundle, nil
+	return rlp.EncodeToBytes(smsg)
 }
 
-// Compiles a new PssTopic from a given name and version.
+// constructs a new PssTopic from a given name and version.
 //
 // Analogous to the name and version members of p2p.Protocol
-func MakeTopic(s string, v int) (PssTopic, error) {
-	t := [TopicLength]byte{}
-	if len(s)+4 <= TopicLength {
-		copy(t[4:len(s)+4], s)
-	} else {
-		return t, fmt.Errorf("topic '%t' too long", s)
-	}
-	binary.PutVarint(t[:4], int64(v))
-	return t, nil
+func NewTopic(s string, v int) PssTopic {
+	h := sha3.NewKeccak()
+	h.Write([]byte(s))
+	buf := make([]byte, 8)
+	bint, _ := binary.PutUvarint(buf, int64(v))
+	h.Write(bint)
+	return h.Sum()
 }

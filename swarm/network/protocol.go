@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/adapters"
 	"github.com/ethereum/go-ethereum/p2p/discover"
@@ -42,9 +41,17 @@ type bzzPeer struct {
 	localAddr  *peerAddr
 	*peerAddr  // remote address
 	lastActive time.Time
-	//peers      map[discover.NodeID]bool
 }
 
+func newBzzPeer(p *protocols.Peer, oaddr, uaddr []byte) {
+	return &bzzPeer{
+		Peer:      p,
+		localAddr: &peerAddr{oaddr, uaddr},
+	}
+}
+
+// LastActive returns the time the peer was seen to send a message
+// implements Peer
 func (self *bzzPeer) LastActive() time.Time {
 	return self.lastActive
 }
@@ -60,7 +67,6 @@ type PeerAddr interface {
 // the Peer interface that peerPool needs
 type Peer interface {
 	PeerAddr
-	// String() string                                       // pretty printable the Node
 	ID() discover.NodeID                                  // the key that uniquely identifies the Node for the peerPool
 	Send(interface{}) error                               // can send messages
 	Drop(error)                                           // disconnect this peer
@@ -68,62 +74,46 @@ type Peer interface {
 	DisconnectHook(func(error))
 }
 
-func BzzCodeMap(msgs ...interface{}) *protocols.CodeMap {
-	ct := protocols.NewCodeMap(ProtocolName, Version, ProtocolMaxMsgSize)
-	ct.Register(&bzzHandshake{})
-	ct.Register(msgs...)
-	return ct
+// ProtocolService interface for Protocol Subservices
+type ProtocolService interface {
+	// the messages the module adds to the protocol
+	MsgTypes() []interface{}
+	// the protocol module service to run on a peer
+	NewPeer(Peer) error
 }
 
-// Bzz is the protocol constructor
+// NewBzz constructs the Bzz protocol composed of ProtocolService
 // returns p2p.Protocol that is to be offered by the node.Service
-func Bzz(oAddr, uAddr []byte, ct *protocols.CodeMap, services func(Peer) error, peerInfo func(id discover.NodeID) interface{}, nodeInfo func() interface{}) *p2p.Protocol {
+func NewBzz(oAddr, uAddr []byte, ps ...ProtocolService) *p2p.Protocol {
+
+	// register Msg Types in protocol code map
+	ct := protocols.NewCodeMap(ProtocolName, Version, ProtocolMaxMsgSize)
+	ct.Register(0, &bzzHandshake{})
+	for i, s := range ps {
+		ct.Register((i+1)*10, s.MsgTypes()...)
+	}
+
+	// set up run function of protocol
 	run := func(p *protocols.Peer) error {
-		bee := &bzzPeer{
-			Peer:      p,
-			localAddr: &peerAddr{oAddr, uAddr},
-		}
+		bee := newBzzPeer(p, oAddr, uAddr)
 		// protocol handshake and its validation
 		// sets remote peer address
-		err := bee.bzzHandshake()
-		if err != nil {
-			log.Error(fmt.Sprintf("handshake error in peer %v: %v", bee.ID(), err))
-			return err
+		if err := bee.bzzHandshake(); err != nil {
+			return fmt.Errorf("handshake error in peer %v: %v", bee.ID(), err)
 		}
-
 		// mount external service models on the peer connection (swap, sync, hive)
-		if services != nil {
-			err = services(bee)
-			if err != nil {
-				log.Error(fmt.Sprintf("protocol service error for peer %v: %v", bee.ID(), err))
-				return err
+		for _, s := range ps {
+			if err := s.NewPeer(bee); err != nil {
+				return fmt.Errorf("protocol service %v failed to start on peer %v", s.Name(), err)
 			}
 		}
-
 		return bee.Run()
 	}
 
-	return protocols.NewProtocol(ProtocolName, Version, run, ct, peerInfo, nodeInfo)
+	return protocols.NewProtocol(ProtocolName, Version, run, ct, nil, nil)
 }
 
-/*
- Handshake
-
-* Version: 8 byte integer version of the protocol
-* NetworkID: 8 byte integer network identifier
-* Addr: the address advertised by the node including underlay and overlay connecctions
-*/
-type bzzHandshake struct {
-	Version   uint64
-	NetworkId uint64
-	Addr      *peerAddr
-}
-
-func (self *bzzHandshake) String() string {
-	return fmt.Sprintf("Handshake: Version: %v, NetworkId: %v, Addr: %v", self.Version, self.NetworkId, self.Addr)
-}
-
-// peerAddr implements the PeerAddress interface
+// peerAddr implements the PeerAddr interface
 type peerAddr struct {
 	OAddr []byte
 	UAddr []byte
@@ -157,17 +147,30 @@ func (self *peerAddr) PO(val pot.PotVal, pos int) (int, bool) {
 		}
 	}
 	return len(one) * 8, true
-	// 	var ha *pot.HashAddress
-	// 	var left, right string
-	// 	if ok {
-	// 		ha = kp.HashAddress
-	// 	} else {
-	// 		ha = val.(*pot.HashAddress)
-	// 	}
 }
 
 func (self *peerAddr) String() string {
 	return fmt.Sprintf("%x <%x>", self.OAddr, self.UAddr)
+}
+
+// TODO: refactor handshake as ProtocolService and
+// make it mockable for simpler protocol exchange tests
+/*
+Handshake
+
+* Version: 8 byte integer version of the protocol
+* NetworkID: 8 byte integer network identifier
+* Addr: the address advertised by the node including underlay and overlay connecctions
+*/
+type bzzHandshake struct {
+	Version   uint64
+	NetworkId uint64
+	Addr      *peerAddr
+}
+
+//
+func (self *bzzHandshake) String() string {
+	return fmt.Sprintf("Handshake: Version: %v, NetworkId: %v, Addr: %v", self.Version, self.NetworkId, self.Addr)
 }
 
 // bzzHandshake negotiates the bzz master handshake
@@ -183,20 +186,15 @@ func (self *bzzPeer) bzzHandshake() error {
 
 	hs, err := self.Handshake(lhs)
 	if err != nil {
-		log.Error(fmt.Sprintf("handshake failed: %v", err))
-		return err
+		return fmt.Errorf("handshake failed: %v", err)
 	}
 
 	rhs := hs.(*bzzHandshake)
 	self.peerAddr = rhs.Addr
-	err = checkBzzHandshake(rhs)
-	if err != nil {
-		log.Error(fmt.Sprintf("handshake between %v and %v  failed: %v", self.localAddr, self.peerAddr, err))
-		return err
+	if err := checkBzzHandshake(rhs); err != nil {
+		return fmt.Errorf("handshake between %v and %v  failed: %v", self.localAddr, self.peerAddr, err)
 	}
-
 	return nil
-
 }
 
 // checkBzzHandshake checks for the validity and compatibility of the remote handshake
@@ -229,7 +227,7 @@ func RandomAddr() *peerAddr {
 }
 
 // NodeId transforms the underlay address to an adapters.NodeId
-func NodeId(addr PeerAddr) *adapters.NodeId {
+func NewNodeIdFromPeerAddr(addr PeerAddr) *adapters.NodeId {
 	return adapters.NewNodeId(addr.UnderlayAddr())
 }
 
