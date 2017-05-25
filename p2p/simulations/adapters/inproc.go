@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/rpc"
+	pssclient "github.com/ethereum/go-ethereum/swarm/pss/client"
 )
 
 // SimAdapter is a NodeAdapter which creates in-memory nodes and connects them
@@ -169,7 +170,9 @@ func (self *SimNode) Snapshots() (map[string][]byte, error) {
 }
 
 // Start starts the RPC handler and the underlying service
-func (self *SimNode) Start(snapshots map[string][]byte) error {
+func (self *SimNode) Start(snapshots map[string][]byte, withpss bool) error {
+	
+	var nodeconfig *node.Config
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	if self.node != nil {
@@ -188,28 +191,43 @@ func (self *SimNode) Start(snapshots map[string][]byte) error {
 			return service, nil
 		}
 	}
-
-	node, err := node.New(&node.Config{
-		P2P: p2p.Config{
-			PrivateKey:      self.config.PrivateKey,
-			MaxPeers:        math.MaxInt32,
-			NoDiscovery:     true,
-			Dialer:          self.adapter,
-			EnableMsgEvents: false,
-		},
-		NoUSB: true,
-	})
+	
+	if withpss {
+		nodeconfig = &node.Config{
+			// defaults are fine for now
+			PSS: &pssclient.PssClientConfig{
+			},
+			NoUSB: true,
+		}
+	} else {
+		nodeconfig = &node.Config{
+			P2P: p2p.Config{
+				PrivateKey:      self.config.PrivateKey,
+				MaxPeers:        math.MaxInt32,
+				NoDiscovery:     true,
+				Dialer:          self.adapter,
+				EnableMsgEvents: false,
+			},
+			NoUSB: true,
+		}
+	}
+	node, err := node.New(nodeconfig)
 	if err != nil {
 		return err
 	}
 
+	nodestartfunc := node.Start
+	if withpss {
+		nodestartfunc = node.StartWithPss
+	}
+	
 	for _, name := range self.config.Services {
 		if err := node.Register(newService(name)); err != nil {
 			return err
 		}
 	}
 
-	if err := node.Start(); err != nil {
+	if err := nodestartfunc(); err != nil {
 		return err
 	}
 

@@ -17,6 +17,7 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -35,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/syndtr/goleveldb/leveldb/storage"
+	pss "github.com/ethereum/go-ethereum/swarm/pss/client"
 )
 
 var (
@@ -42,6 +44,7 @@ var (
 	ErrNodeStopped    = errors.New("node not started")
 	ErrNodeRunning    = errors.New("node already running")
 	ErrServiceUnknown = errors.New("unknown service")
+	ErrConfig		  = errors.New("configuration error")
 
 	datadirInUseErrnos = map[uint]bool{11: true, 32: true, 35: true}
 )
@@ -58,6 +61,8 @@ type Node struct {
 	serverConfig p2p.Config
 	server       *p2p.Server // Currently running P2P networking layer
 
+	pssclient	*pss.PssClient	// Currently running PSS networking layer
+	
 	serviceFuncs []ServiceConstructor     // Service constructors (in dependency order)
 	services     map[reflect.Type]Service // Currently running services
 
@@ -228,6 +233,114 @@ func (n *Node) Start() error {
 	// Finish initializing the startup
 	n.services = services
 	n.server = running
+	n.stop = make(chan struct{})
+
+	return nil
+}
+
+// Start create a live P2P node and starts running it.
+func (n *Node) StartWithPss() error {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	// Short circuit if the node's already running
+	/*if n.server != nil {
+		return ErrNodeRunning
+	}*/
+	if n.config.PSS == nil {
+		return ErrConfig
+	}
+	if n.pssclient != nil {
+		return ErrNodeRunning
+	}
+	if err := n.openDataDir(); err != nil {
+		return err
+	}
+
+	// Initialize the p2p server. This creates the node key and
+	// discovery databases.
+	/*n.serverConfig = n.config.P2P
+	n.serverConfig.PrivateKey = n.config.NodeKey()
+	n.serverConfig.Name = n.config.NodeName()
+	if n.serverConfig.StaticNodes == nil {
+		n.serverConfig.StaticNodes = n.config.StaticNodes()
+	}
+	if n.serverConfig.TrustedNodes == nil {
+		n.serverConfig.TrustedNodes = n.config.TrusterNodes()
+	}
+	if n.serverConfig.NodeDatabase == "" {
+		n.serverConfig.NodeDatabase = n.config.NodeDB()
+	}
+	running := &p2p.Server{Config: n.serverConfig}*/
+	
+	running := pss.NewPssClient(context.Background(), nil, n.config.PSS)
+	log.Info("Starting PSS node", "localuri", n.config.PSS.SelfHost, "remoteuri", fmt.Sprintf("%s:%d", n.config.PSS.RemoteHost, n.config.PSS.RemotePort))
+
+	// Otherwise copy and specialize the P2P configuration
+	services := make(map[reflect.Type]Service)
+	for _, constructor := range n.serviceFuncs {
+		// Create a new context for the particular service
+		ctx := &ServiceContext{
+			config:         n.config,
+			services:       make(map[reflect.Type]Service),
+			EventMux:       n.eventmux,
+			AccountManager: n.accman,
+		}
+		for kind, s := range services { // copy needed for threaded access
+			ctx.services[kind] = s
+		}
+		// Construct and save the service
+		service, err := constructor(ctx)
+		if err != nil {
+			return err
+		}
+		kind := reflect.TypeOf(service)
+		if _, exists := services[kind]; exists {
+			return &DuplicateServiceError{Kind: kind}
+		}
+		services[kind] = service
+	}
+
+	if err := running.Start(); err != nil {
+		
+		/*if errno, ok := err.(syscall.Errno); ok && datadirInUseErrnos[uint(errno)] {
+			return ErrDatadirUsed
+		}*/
+		return err
+	}
+	
+	for _, service := range services {
+		for _, proto := range service.Protocols() {
+			running.RunProtocol(&proto)
+		}
+	}
+	
+	// Start each of the services
+	/*started := []reflect.Type{}
+	for kind, service := range services {
+		// Start the next service, stopping all previous upon failure
+		if err := service.Start(running); err != nil {
+			for _, kind := range started {
+				services[kind].Stop()
+			}
+			running.Stop()
+
+			return err
+		}
+		// Mark the service started for potential cleanup
+		started = append(started, kind)
+	}*/
+	// Lastly start the configured RPC interfaces
+	if err := n.startRPC(services); err != nil {
+		for _, service := range services {
+			service.Stop()
+		}
+		running.Stop()
+		return err
+	}
+	// Finish initializing the startup
+	n.services = services
+	n.pssclient = running
 	n.stop = make(chan struct{})
 
 	return nil

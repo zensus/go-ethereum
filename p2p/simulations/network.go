@@ -286,10 +286,15 @@ func (self *Network) StopAll() error {
 
 // Start(id) starts up the node (relevant only for instance with own p2p or remote)
 func (self *Network) Start(id *adapters.NodeId) error {
-	return self.startWithSnapshots(id, nil)
+	return self.startWithSnapshots(id, nil, false)
 }
 
-func (self *Network) startWithSnapshots(id *adapters.NodeId, snapshots map[string][]byte) error {
+// Start(id) starts up the node (relevant only for instance with own p2p or remote)
+func (self *Network) StartWithPss(id *adapters.NodeId) error {
+	return self.startWithSnapshots(id, nil, true)
+}
+
+func (self *Network) startWithSnapshots(id *adapters.NodeId, snapshots map[string][]byte, withpss bool) error {
 	node := self.GetNode(id)
 	if node == nil {
 		return fmt.Errorf("node %v does not exist", id)
@@ -298,7 +303,7 @@ func (self *Network) startWithSnapshots(id *adapters.NodeId, snapshots map[strin
 		return fmt.Errorf("node %v already up", id)
 	}
 	log.Trace(fmt.Sprintf("starting node %v: %v using %v", id, node.Up, self.nodeAdapter.Name()))
-	if err := node.Start(snapshots); err != nil {
+	if err := node.Start(snapshots, withpss); err != nil {
 		log.Warn(fmt.Sprintf("start up failed: %v", err))
 		return err
 	}
@@ -662,7 +667,7 @@ func (self *Network) Load(snap *Snapshot) error {
 		if !node.Up {
 			continue
 		}
-		if err := self.startWithSnapshots(node.Config.Id, node.Snapshots); err != nil {
+		if err := self.startWithSnapshots(node.Config.Id, node.Snapshots, false); err != nil {
 			return err
 		}
 	}

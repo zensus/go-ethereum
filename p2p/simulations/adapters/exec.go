@@ -122,7 +122,7 @@ func (n *ExecNode) Client() (*rpc.Client, error) {
 // Start exec's the node passing the ID and service as command line arguments
 // and the node config encoded as JSON in the _P2P_NODE_CONFIG environment
 // variable
-func (n *ExecNode) Start(snapshots map[string][]byte) (err error) {
+func (n *ExecNode) Start(snapshots map[string][]byte, withpss bool) (err error) {
 	if n.Cmd != nil {
 		return errors.New("already started")
 	}

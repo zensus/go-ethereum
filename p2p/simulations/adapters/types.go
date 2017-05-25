@@ -52,7 +52,7 @@ type Node interface {
 	ServeRPC(net.Conn) error
 
 	// Start starts the node with the given snapshot
-	Start(snapshots map[string][]byte) error
+	Start(snapshots map[string][]byte, withpss bool) error
 
 	// Stop stops the node
 	Stop() error

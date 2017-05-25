@@ -177,6 +177,11 @@ func (c *Client) StartNode(networkID, nodeID string) error {
 	return c.Post(fmt.Sprintf("/networks/%s/nodes/%s/start", networkID, nodeID), nil, nil)
 }
 
+// StartNode starts a node
+func (c *Client) StartNodeWithPss(networkID, nodeID string) error {
+	return c.Post(fmt.Sprintf("/networks/%s/nodes/%s/startpss", networkID, nodeID), nil, nil)
+}
+
 // StopNode stops a node
 func (c *Client) StopNode(networkID, nodeID string) error {
 	return c.Post(fmt.Sprintf("/networks/%s/nodes/%s/stop", networkID, nodeID), nil, nil)
@@ -303,6 +308,7 @@ func NewServer(config *ServerConfig) *Server {
 	s.GET("/networks/:netid/nodes", s.GetNodes)
 	s.GET("/networks/:netid/nodes/:nodeid", s.GetNode)
 	s.POST("/networks/:netid/nodes/:nodeid/start", s.StartNode)
+	s.POST("/networks/:netid/nodes/:nodeid/startpss", s.StartNodeWithPss)
 	s.POST("/networks/:netid/nodes/:nodeid/stop", s.StopNode)
 	s.POST("/networks/:netid/nodes/:nodeid/conn/:peerid", s.ConnectNode)
 	s.DELETE("/networks/:netid/nodes/:nodeid/conn/:peerid", s.DisconnectNode)
@@ -562,6 +568,19 @@ func (s *Server) StartNode(w http.ResponseWriter, req *http.Request) {
 	node := req.Context().Value("node").(*Node)
 
 	if err := network.Start(node.ID()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.JSON(w, http.StatusOK, node.NodeInfo())
+}
+
+// StartNode starts a node with Pss as transport backend
+func (s *Server) StartNodeWithPss(w http.ResponseWriter, req *http.Request) {
+	network := req.Context().Value("network").(*Network)
+	node := req.Context().Value("node").(*Node)
+
+	if err := network.StartWithPss(node.ID()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
