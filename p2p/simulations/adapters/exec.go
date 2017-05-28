@@ -36,12 +36,17 @@ import (
 // execP2PNode function for more information.
 type ExecAdapter struct {
 	BaseDir string
+
+	nodes map[discover.NodeID]*ExecNode
 }
 
 // NewExecAdapter returns an ExecAdapter which stores node data in
 // subdirectories of the given base directory
 func NewExecAdapter(baseDir string) *ExecAdapter {
-	return &ExecAdapter{BaseDir: baseDir}
+	return &ExecAdapter{
+		BaseDir: baseDir,
+		nodes:   make(map[discover.NodeID]*ExecNode),
+	}
 }
 
 // Name returns the name of the adapter for logging purpoeses
@@ -86,11 +91,13 @@ func (e *ExecAdapter) NewNode(config *NodeConfig) (Node, error) {
 	conf.Stack.P2P.ListenAddr = "127.0.0.1:0"
 
 	node := &ExecNode{
-		ID:     config.ID,
-		Dir:    dir,
-		Config: conf,
+		ID:      config.ID,
+		Dir:     dir,
+		Config:  conf,
+		adapter: e,
 	}
 	node.newCmd = node.execCommand
+	e.nodes[node.ID] = node
 	return node, nil
 }
 
@@ -108,10 +115,11 @@ type ExecNode struct {
 	Cmd    *exec.Cmd
 	Info   *p2p.NodeInfo
 
-	client *rpc.Client
-	wsAddr string
-	newCmd func() *exec.Cmd
-	key    *ecdsa.PrivateKey
+	adapter *ExecAdapter
+	client  *rpc.Client
+	wsAddr  string
+	newCmd  func() *exec.Cmd
+	key     *ecdsa.PrivateKey
 }
 
 // Addr returns the node's enode URL
@@ -149,6 +157,10 @@ func (n *ExecNode) Start(snapshots map[string][]byte) (err error) {
 	// encode a copy of the config containing the snapshot
 	confCopy := *n.Config
 	confCopy.Snapshots = snapshots
+	confCopy.PeerAddrs = make(map[string]string)
+	for id, node := range n.adapter.nodes {
+		confCopy.PeerAddrs[id.String()] = node.wsAddr
+	}
 	confData, err := json.Marshal(confCopy)
 	if err != nil {
 		return fmt.Errorf("error generating node config: %s", err)
@@ -315,7 +327,8 @@ func init() {
 type execNodeConfig struct {
 	Stack     node.Config       `json:"stack"`
 	Node      *NodeConfig       `json:"node"`
-	Snapshots map[string][]byte `json:"snapshot,omitempty"`
+	Snapshots map[string][]byte `json:"snapshots,omitempty"`
+	PeerAddrs map[string]string `json:"peer_addrs,omitempty"`
 }
 
 // execP2PNode starts a devp2p node when the current binary is executed with
@@ -348,11 +361,14 @@ func execP2PNode() {
 		if !exists {
 			log.Crit(fmt.Sprintf("unknown node service %q", name))
 		}
-		var snapshot []byte
-		if conf.Snapshots != nil {
-			snapshot = conf.Snapshots[name]
+		ctx := &ServiceContext{
+			RPCDialer: &wsRPCDialer{addrs: conf.PeerAddrs},
+			NodeID:    id,
 		}
-		services[name] = serviceFunc(id, snapshot)
+		if conf.Snapshots != nil {
+			ctx.Snapshot = conf.Snapshots[name]
+		}
+		services[name] = serviceFunc(ctx)
 	}
 
 	// use explicit IP address in ListenAddr so that Enode URL is usable
@@ -456,4 +472,16 @@ func (api SnapshotAPI) Snapshot() (map[string][]byte, error) {
 		}
 	}
 	return snapshots, nil
+}
+
+type wsRPCDialer struct {
+	addrs map[string]string
+}
+
+func (w *wsRPCDialer) DialRPC(id discover.NodeID) (*rpc.Client, error) {
+	addr, ok := w.addrs[id.String()]
+	if !ok {
+		return nil, fmt.Errorf("unknown node: %s", id)
+	}
+	return rpc.DialWebsocket(context.Background(), addr, "http://localhost")
 }
