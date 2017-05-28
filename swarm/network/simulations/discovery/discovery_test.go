@@ -179,8 +179,8 @@ func triggerChecks(trigger chan discover.NodeID, net *simulations.Network, id di
 	return nil
 }
 
-func newService(id discover.NodeID, snapshot []byte) node.Service {
-	addr := network.NewAddrFromNodeID(id)
+func newService(ctx *adapters.ServiceContext) node.Service {
+	addr := network.NewAddrFromNodeID(ctx.NodeID)
 
 	kp := network.NewKadParams()
 	kp.MinProxBinSize = testMinProxBinSize
