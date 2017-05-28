@@ -286,8 +286,8 @@ func (t *expectEvents) expect(events ...*Event) {
 				if event.Node == nil {
 					t.Fatal("expected event.Node to be set")
 				}
-				if event.Node.ID().NodeID != expected.Node.ID().NodeID {
-					t.Fatalf("expected node event %d to have id %q, got %q", i, expected.Node.ID().Label(), event.Node.ID().Label())
+				if event.Node.ID() != expected.Node.ID() {
+					t.Fatalf("expected node event %d to have id %q, got %q", i, expected.Node.ID().TerminalString(), event.Node.ID().TerminalString())
 				}
 				if event.Node.Up != expected.Node.Up {
 					t.Fatalf("expected node event %d to have up=%t, got up=%t", i, expected.Node.Up, event.Node.Up)
@@ -297,17 +297,11 @@ func (t *expectEvents) expect(events ...*Event) {
 				if event.Conn == nil {
 					t.Fatal("expected event.Conn to be set")
 				}
-				if event.Conn.One == nil {
-					t.Fatal("expected event.Conn.One to be set")
+				if event.Conn.One != expected.Conn.One {
+					t.Fatalf("expected conn event %d to have one=%q, got one=%q", i, expected.Conn.One.TerminalString(), event.Conn.One.TerminalString())
 				}
-				if event.Conn.Other == nil {
-					t.Fatal("expected event.Conn.Other to be set")
-				}
-				if event.Conn.One.NodeID != expected.Conn.One.NodeID {
-					t.Fatalf("expected conn event %d to have one=%q, got one=%q", i, expected.Conn.One.Label(), event.Conn.One.Label())
-				}
-				if event.Conn.Other.NodeID != expected.Conn.Other.NodeID {
-					t.Fatalf("expected conn event %d to have other=%q, got other=%q", i, expected.Conn.Other.Label(), event.Conn.Other.Label())
+				if event.Conn.Other != expected.Conn.Other {
+					t.Fatalf("expected conn event %d to have other=%q, got other=%q", i, expected.Conn.Other.TerminalString(), event.Conn.Other.TerminalString())
 				}
 				if event.Conn.Up != expected.Conn.Up {
 					t.Fatalf("expected conn event %d to have up=%t, got up=%t", i, expected.Conn.Up, event.Conn.Up)
@@ -435,8 +429,9 @@ func TestHTTPSnapshot(t *testing.T) {
 		t.Fatalf("error creating snapshot: %s", err)
 	}
 	for i, state := range states {
-		if string(snap.Nodes[i].Snapshot) != state {
-			t.Fatalf("expected snapshot state %q, got %q", state, snap.Nodes[i].Snapshot)
+		gotState := snap.Nodes[i].Snapshots["test"]
+		if string(gotState) != state {
+			t.Fatalf("expected snapshot state %q, got %q", state, gotState)
 		}
 	}
 
