@@ -21,20 +21,20 @@ import (
 const (
 	inboxCapacity  = 3000
 	outboxCapacity = 100
-	defaultWSHost = 8546
+	defaultWSHost  = 8546
 	addrLen        = common.HashLength
 )
 
 type PssClientConfig struct {
-	SelfHost     string
-	RemoteHost   string
-	RemotePort	int
-	Secure		bool
+	SelfHost   string
+	RemoteHost string
+	RemotePort int
+	Secure     bool
 }
 
 type PssClient struct {
-	localuri	string
-	remoteuri	string
+	localuri     string
+	remoteuri    string
 	ctx          context.Context
 	cancel       func()
 	subscription *rpc.ClientSubscription
@@ -52,8 +52,8 @@ type pssRPCRW struct {
 	*PssClient
 	topic *pss.PssTopic
 	//spec  *protocols.Spec
-	msgC  chan []byte
-	addr  pot.Address
+	msgC chan []byte
+	addr pot.Address
 }
 
 //func (self *PssClient) newpssRPCRW(addr pot.Address, spec *protocols.Spec, topic *PssTopic) *pssRPCRW {
@@ -62,8 +62,8 @@ func (self *PssClient) newpssRPCRW(addr pot.Address, topic *pss.PssTopic) *pssRP
 		PssClient: self,
 		topic:     topic,
 		//spec:      spec,
-		msgC:      make(chan []byte),
-		addr:      addr,
+		msgC: make(chan []byte),
+		addr: addr,
 	}
 }
 
@@ -78,7 +78,7 @@ func (rw *pssRPCRW) ReadMsg() (p2p.Msg, error) {
 	return pmsg, nil
 }
 
-func (rw *pssRPCRW) WriteMsg (msg p2p.Msg) error {
+func (rw *pssRPCRW) WriteMsg(msg p2p.Msg) error {
 	rlpdata := make([]byte, msg.Size)
 	msg.Payload.Read(rlpdata)
 	pmsg, err := rlp.EncodeToBytes(pss.PssProtocolMsg{
@@ -91,7 +91,7 @@ func (rw *pssRPCRW) WriteMsg (msg p2p.Msg) error {
 	}
 	return rw.PssClient.ws.CallContext(rw.PssClient.ctx, nil, "pss_sendRaw", rw.topic, pss.PssAPIMsg{
 		Addr: rw.addr.Bytes(),
-		Msg: pmsg,
+		Msg:  pmsg,
 	})
 }
 
@@ -124,12 +124,11 @@ func NewPssClient(ctx context.Context, cancel func(), config *PssClientConfig) *
 
 	if ctx == nil {
 		ctx = context.Background()
-		
 	}
 	if cancel == nil {
 		cancel = func() { return }
 	}
-	
+
 	pssc := &PssClient{
 		msgC:     make(chan pss.PssAPIMsg),
 		quitC:    make(chan struct{}),
@@ -141,7 +140,7 @@ func NewPssClient(ctx context.Context, cancel func(), config *PssClientConfig) *
 	if config.RemoteHost == "" {
 		config.RemoteHost = "localhost"
 	}
-	
+
 	if config.RemotePort == 0 {
 		config.RemotePort = defaultWSHost
 	}
@@ -160,12 +159,25 @@ func NewPssClient(ctx context.Context, cancel func(), config *PssClientConfig) *
 	return pssc
 }
 
+func NewPssClientWithRPC(ctx context.Context, client *rpc.Client) *PssClient {
+	return &PssClient{
+		msgC:     make(chan pss.PssAPIMsg),
+		quitC:    make(chan struct{}),
+		peerPool: make(map[pss.PssTopic]map[pot.Address]*pssRPCRW),
+		ws:       client,
+		ctx:      ctx,
+	}
+}
+
 func (self *PssClient) shutdown() {
 	atomic.StoreUint32(&self.quitting, 1)
 	self.cancel()
 }
 
 func (self *PssClient) Start() error {
+	if self.ws != nil {
+		return nil
+	}
 	log.Debug("Dialing ws", "src", self.localuri, "dst", self.remoteuri)
 	ws, err := rpc.DialWebsocket(self.ctx, self.remoteuri, self.localuri)
 	if err != nil {
