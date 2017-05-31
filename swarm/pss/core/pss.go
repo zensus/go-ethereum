@@ -15,7 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/pot"
-	//"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/network"
 	"github.com/ethereum/go-ethereum/swarm/storage"
@@ -411,6 +411,21 @@ func (prw PssReadWriter) ReadMsg() (p2p.Msg, error) {
 
 // Implements p2p.MsgWriter
 func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
+	log.Warn("got writemsg pssclient", "msg", msg)
+	rlpdata := make([]byte, msg.Size)
+	msg.Payload.Read(rlpdata)
+	pmsg, err := rlp.EncodeToBytes(pss.PssProtocolMsg{
+		Code:    msg.Code,
+		Size:    msg.Size,
+		Payload: rlpdata,
+	})
+	if err != nil {
+		return err
+	}
+	return prw.Pss.Send(prw.To.Bytes(), *prw.topic, pmsg);
+}
+
+/*func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 	log.Trace(fmt.Sprintf("pssrw writemsg: %v", msg))
 	ifc, found := prw.spec.NewMsg(msg.Code)
 	if !found {
@@ -423,7 +438,7 @@ func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 		return err
 	}
 	return prw.Pss.Send(prw.To.Bytes(), *prw.topic, pmsg)
-}
+}*/
 
 // Injects a p2p.Msg into the MsgReadWriter, so that it appears on the associated p2p.MsgReader
 func (prw PssReadWriter) injectMsg(msg p2p.Msg) error {

@@ -45,7 +45,7 @@ type PssClient struct {
 	ws           *rpc.Client
 	lock         sync.Mutex
 	peerPool     map[pss.PssTopic]map[pot.Address]*pssRPCRW
-	protos       []*p2p.Protocol
+	protos       map[pss.PssTopic]*p2p.Protocol
 }
 
 type pssRPCRW struct {
@@ -79,6 +79,7 @@ func (rw *pssRPCRW) ReadMsg() (p2p.Msg, error) {
 }
 
 func (rw *pssRPCRW) WriteMsg(msg p2p.Msg) error {
+	log.Warn("got writemsg pssclient", "msg", msg)
 	rlpdata := make([]byte, msg.Size)
 	msg.Payload.Read(rlpdata)
 	pmsg, err := rlp.EncodeToBytes(pss.PssProtocolMsg{
@@ -133,6 +134,7 @@ func NewPssClient(ctx context.Context, cancel func(), config *PssClientConfig) *
 		msgC:     make(chan pss.PssAPIMsg),
 		quitC:    make(chan struct{}),
 		peerPool: make(map[pss.PssTopic]map[pot.Address]*pssRPCRW),
+		protos:	  make(map[pss.PssTopic]*p2p.Protocol),
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -164,6 +166,7 @@ func NewPssClientWithRPC(ctx context.Context, client *rpc.Client) *PssClient {
 		msgC:     make(chan pss.PssAPIMsg),
 		quitC:    make(chan struct{}),
 		peerPool: make(map[pss.PssTopic]map[pot.Address]*pssRPCRW),
+		protos:	  make(map[pss.PssTopic]*p2p.Protocol),
 		ws:       client,
 		ctx:      ctx,
 	}
@@ -209,7 +212,6 @@ func (self *PssClient) RunProtocol(proto *p2p.Protocol) error {
 				var addr pot.Address
 				copy(addr[:], msg.Addr)
 				if self.peerPool[topic][addr] == nil {
-					//self.peerPool[topic][addr] = self.newpssRPCRW(addr, spec, &topic)
 					self.peerPool[topic][addr] = self.newpssRPCRW(addr, &topic)
 					nid, _ := discover.HexID("0x00")
 					p := p2p.NewPeer(nid, fmt.Sprintf("%v", addr), []p2p.Cap{})
@@ -225,7 +227,7 @@ func (self *PssClient) RunProtocol(proto *p2p.Protocol) error {
 		}
 	}()
 
-	self.protos = append(self.protos, proto)
+	self.protos[topic] = proto
 	return nil
 }
 
@@ -238,6 +240,9 @@ func (self *PssClient) AddPssPeer(addr pot.Address, spec *protocols.Spec) {
 	topic := pss.NewTopic(spec.Name, int(spec.Version))
 	if self.peerPool[topic][addr] == nil {
 		self.peerPool[topic][addr] = self.newpssRPCRW(addr, &topic)
+		nid, _ := discover.HexID("0x00")
+		p := p2p.NewPeer(nid, fmt.Sprintf("%v", addr), []p2p.Cap{})
+		go self.protos[topic].Run(p, self.peerPool[topic][addr])
 	}
 }
 

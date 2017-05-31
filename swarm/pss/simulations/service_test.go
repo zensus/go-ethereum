@@ -3,10 +3,12 @@ package pss_simulations
 import (
 	"context"
 	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/discover"
@@ -21,6 +23,12 @@ import (
 	"github.com/ethereum/go-ethereum/swarm/pss/core"
 	"github.com/ethereum/go-ethereum/swarm/storage"
 )
+
+func init() {
+	h := log.CallerFileHandler(log.StreamHandler(os.Stderr, log.TerminalFormat(true)))
+	log.Root().SetHandler(h)
+}
+
 
 // TestPssProtocol starts a pss network along with two test nodes which run
 // protocols via the pss network, connects those two test nodes and then
