@@ -56,7 +56,6 @@ type pssRPCRW struct {
 	addr pot.Address
 }
 
-//func (self *PssClient) newpssRPCRW(addr pot.Address, spec *protocols.Spec, topic *PssTopic) *pssRPCRW {
 func (self *PssClient) newpssRPCRW(addr pot.Address, topic *pss.PssTopic) *pssRPCRW {
 	return &pssRPCRW{
 		PssClient: self,
@@ -134,7 +133,7 @@ func NewPssClient(ctx context.Context, cancel func(), config *PssClientConfig) *
 		msgC:     make(chan pss.PssAPIMsg),
 		quitC:    make(chan struct{}),
 		peerPool: make(map[pss.PssTopic]map[pot.Address]*pssRPCRW),
-		protos:	  make(map[pss.PssTopic]*p2p.Protocol),
+		protos:   make(map[pss.PssTopic]*p2p.Protocol),
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -166,7 +165,7 @@ func NewPssClientWithRPC(ctx context.Context, client *rpc.Client) *PssClient {
 		msgC:     make(chan pss.PssAPIMsg),
 		quitC:    make(chan struct{}),
 		peerPool: make(map[pss.PssTopic]map[pot.Address]*pssRPCRW),
-		protos:	  make(map[pss.PssTopic]*p2p.Protocol),
+		protos:   make(map[pss.PssTopic]*p2p.Protocol),
 		ws:       client,
 		ctx:      ctx,
 	}

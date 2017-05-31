@@ -29,7 +29,6 @@ func init() {
 	log.Root().SetHandler(h)
 }
 
-
 // TestPssProtocol starts a pss network along with two test nodes which run
 // protocols via the pss network, connects those two test nodes and then
 // waits for them to handshake

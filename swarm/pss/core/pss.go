@@ -15,12 +15,12 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/pot"
-	"github.com/ethereum/go-ethereum/rlp"
+	//"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/network"
-	"github.com/ethereum/go-ethereum/swarm/storage"
 	"github.com/ethereum/go-ethereum/swarm/pss"
 	pssapi "github.com/ethereum/go-ethereum/swarm/pss/api"
+	"github.com/ethereum/go-ethereum/swarm/storage"
 )
 
 const (
@@ -39,8 +39,6 @@ type senderPeer interface {
 	Address() []byte
 	Send(interface{}) error
 }
-
-
 
 var pssSpec = &protocols.Spec{
 	Name:       "pss",
@@ -74,10 +72,10 @@ type Pss struct {
 	network.Overlay // we can get the overlayaddress from this
 	//peerPool map[pot.Address]map[PssTopic]p2p.MsgReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
 	peerPool map[pot.Address]map[pss.PssTopic]p2p.MsgReadWriter // keep track of all virtual p2p.Peers we are currently speaking to
-	fwdPool  map[pot.Address]*protocols.Peer                // keep track of all peers sitting on the pssmsg routing layer
-	handlers map[pss.PssTopic]map[*pss.PssHandler]bool              // topic and version based pss payload handlers
-	fwdcache map[pssDigest]pssCacheEntry                    // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
-	cachettl time.Duration                                  // how long to keep messages in fwdcache
+	fwdPool  map[pot.Address]*protocols.Peer                    // keep track of all peers sitting on the pssmsg routing layer
+	handlers map[pss.PssTopic]map[*pss.PssHandler]bool          // topic and version based pss payload handlers
+	fwdcache map[pssDigest]pssCacheEntry                        // checksum of unique fields from pssmsg mapped to expiry, cache to determine whether to drop msg
+	cachettl time.Duration                                      // how long to keep messages in fwdcache
 	lock     sync.Mutex
 	dpa      *storage.DPA
 }
@@ -422,7 +420,7 @@ func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
 	if err != nil {
 		return err
 	}
-	return prw.Pss.Send(prw.To.Bytes(), *prw.topic, pmsg);
+	return prw.Pss.Send(prw.To.Bytes(), *prw.topic, pmsg)
 }
 
 /*func (prw PssReadWriter) WriteMsg(msg p2p.Msg) error {
@@ -491,7 +489,3 @@ func (self *PssProtocol) handle(msg []byte, p *p2p.Peer, senderAddr []byte) erro
 
 	return nil
 }
-
-
-
-
